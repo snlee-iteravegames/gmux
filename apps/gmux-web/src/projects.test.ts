@@ -230,6 +230,101 @@ describe('buildProjectFolders', () => {
     expect(folders[0].sessions.map(s => s.id)).toEqual(['c', 'a', 'b'])
   })
 
+  describe('automatic workspace folders', () => {
+    it('groups unstamped sessions by normalized workspace_root or cwd', () => {
+      const sessions = [
+        makeSession({ id: 'a', cwd: '/work/app/src', workspace_root: '/work//app/' }),
+        makeSession({ id: 'b', cwd: '/work/app/./tests', workspace_root: '/work/app' }),
+        makeSession({ id: 'c', cwd: '/work/app/../other' }),
+      ]
+      const folders = buildProjectFolders([], sessions)
+      expect(folders.map(f => [f.name, f.launchCwd, f.sessions.map(s => s.id)])).toEqual([
+        ['app', '/work/app', ['a', 'b']],
+        ['other', '/work/other', ['c']],
+      ])
+      expect(folders.every(f => f.automatic)).toBe(true)
+    })
+
+    it('never combines the same directory from different origin hosts', () => {
+      const sessions = [
+        makeSession({ id: 'local', cwd: '/work/app' }),
+        makeSession({ id: 'remote@tower', cwd: '/work/app', peer: 'tower' }),
+      ]
+      const folders = buildProjectFolders([], sessions)
+      expect(folders.map(f => [f.peer, f.sessions.map(s => s.id)])).toEqual([
+        [undefined, ['local']],
+        ['tower', ['remote@tower']],
+      ])
+      expect(folders[0].slug).toBe(folders[1].slug)
+      expect(folders[0].key).not.toBe(folders[1].key)
+    })
+
+    it('keeps configured and stamped project ownership authoritative', () => {
+      const projects: ProjectItem[] = [{ slug: 'app', match: [{ path: '/work/app' }] }]
+      const sessions = [
+        makeSession({ id: 'awaiting-stamp', cwd: '/work/app/src' }),
+        makeSession({ id: 'stamped', cwd: '/elsewhere', project_slug: 'app', project_index: 0 }),
+        makeSession({ id: 'automatic', cwd: '/work/other' }),
+      ]
+      const folders = buildProjectFolders(projects, sessions)
+      expect(folders.map(f => [f.slug, f.sessions.map(s => s.id)])).toEqual([
+        ['app', ['stamped']],
+        [expect.stringMatching(/^auto-other-/), ['automatic']],
+      ])
+    })
+
+    it('orders derived folders local-first, then by host and normalized path', () => {
+      const sessions = [
+        makeSession({ id: 'z', cwd: '/z', peer: 'z-host' }),
+        makeSession({ id: 'b', cwd: '/b' }),
+        makeSession({ id: 'a', cwd: '/a' }),
+        makeSession({ id: 'p', cwd: '/p', peer: 'a-host' }),
+      ]
+      const folders = buildProjectFolders([], sessions)
+      expect(folders.map(f => `${f.peer ?? 'local'}:${f.launchCwd}`)).toEqual([
+        'local:/a', 'local:/b', 'a-host:/p', 'z-host:/z',
+      ])
+    })
+  })
+
+  describe('triage-first session ordering', () => {
+    it('sorts unread, error, working, then idle/resumable tiers', () => {
+      const projects: ProjectItem[] = [{ slug: 'app', match: [{ path: '/work/app' }] }]
+      const sessions = [
+        makeSession({ id: 'idle', cwd: '/work/app', project_slug: 'app', project_index: 0 }),
+        makeSession({ id: 'working', cwd: '/work/app', project_slug: 'app', project_index: 3,
+          status: { label: 'working', working: true } }),
+        makeSession({ id: 'error', cwd: '/work/app', project_slug: 'app', project_index: 2,
+          status: { label: 'failed', working: false, error: true } }),
+        makeSession({ id: 'unread', cwd: '/work/app', project_slug: 'app', project_index: 4, unread: true }),
+        makeSession({ id: 'both', cwd: '/work/app', project_slug: 'app', project_index: 1, unread: true,
+          status: { label: 'failed', working: false, error: true } }),
+      ]
+      expect(buildProjectFolders(projects, sessions)[0].sessions.map(s => s.id)).toEqual([
+        'both', 'unread', 'error', 'working', 'idle',
+      ])
+    })
+
+    it('uses authoritative index inside a tier, then recency and id', () => {
+      const same = '2026-02-01T00:00:00Z'
+      const projects: ProjectItem[] = [{ slug: 'app', match: [{ path: '/work/app' }] }]
+      const stamped = [
+        makeSession({ id: 'index-2', cwd: '/work/app', project_slug: 'app', project_index: 2, unread: true,
+          last_activity_at: '2026-03-01T00:00:00Z' }),
+        makeSession({ id: 'index-1', cwd: '/work/app', project_slug: 'app', project_index: 1, unread: true,
+          last_activity_at: '2026-01-01T00:00:00Z' }),
+      ]
+      expect(buildProjectFolders(projects, stamped)[0].sessions.map(s => s.id)).toEqual(['index-1', 'index-2'])
+
+      const automatic = [
+        makeSession({ id: 'older', cwd: '/other', last_activity_at: '2026-01-01T00:00:00Z' }),
+        makeSession({ id: 'b', cwd: '/other', last_activity_at: same }),
+        makeSession({ id: 'a', cwd: '/other', last_activity_at: same }),
+      ]
+      expect(buildProjectFolders([], automatic)[0].sessions.map(s => s.id)).toEqual(['a', 'b', 'older'])
+    })
+  })
+
   // ── References to peer-owned projects ──────────────────────────
 
   it('renders a reference folder filled by the peer\'s stamped sessions', () => {

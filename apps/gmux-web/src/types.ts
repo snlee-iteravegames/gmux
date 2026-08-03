@@ -102,6 +102,8 @@ export interface Folder {
    * gone) and from a disconnected-but-known peer. (refs #270)
    */
   unresolved?: boolean
+  /** Derived from an unstamped session's origin host + workspace directory. */
+  automatic?: boolean
   sessions: Session[]
 }
 

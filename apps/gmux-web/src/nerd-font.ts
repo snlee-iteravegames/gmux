@@ -4,7 +4,7 @@ import type { Terminal } from '@xterm/xterm'
  * A Nerd Font icon code point used to probe whether the icon fallback font has
  * finished loading. U+F015 (Font Awesome "home") sits in the bundled subset
  * and inside the @font-face's unicode-range (see fonts.css), so checking it
- * tells us specifically whether the Nerd Font — not Fira Code — is available.
+ * tells us specifically whether the Nerd Font — not JetBrains Mono — is available.
  */
 const NERD_FONT_PROBE = '\uf015'
 
@@ -46,7 +46,7 @@ export function refreshAtlasWhenIconFontLoads(
   }
 
   const onLoadingDone = () => {
-    // `loadingdone` fires for any font (e.g. Fira Code weights); only act once
+    // `loadingdone` fires for any font (e.g. JetBrains Mono weights); only act once
     // the icon font specifically is ready.
     if (!fonts.check(spec, NERD_FONT_PROBE)) return
     term.clearTextureAtlas()

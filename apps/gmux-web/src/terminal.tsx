@@ -1075,7 +1075,7 @@ export function MockTerminal({ sessionId }: { sessionId: string }) {
 
     const term = new Terminal({
       theme: TERM_THEME,
-      fontFamily: "'Fira Code', 'Symbols Nerd Font Mono', monospace",
+      fontFamily: "'JetBrains Mono', 'Symbols Nerd Font Mono', monospace",
       fontSize: 13,
       disableStdin: true,
       cursorBlink: false,

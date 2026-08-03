@@ -184,7 +184,7 @@ export default function InputDiagnostics() {
 
     const term = new Terminal({
       theme: TERM_THEME,
-      fontFamily: "'Fira Code', monospace",
+      fontFamily: "'JetBrains Mono', monospace",
       fontSize: 14,
       cursorBlink: true,
       scrollback: 100,

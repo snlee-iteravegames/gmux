@@ -300,6 +300,46 @@ export function countUnmatchedActive(
 
 // --- Sidebar folders ---
 
+/** Lexically normalize a server-provided workspace path for automatic folders. */
+export function normalizeWorkspacePath(path: string): string {
+  const raw = path.trim().replaceAll('\\', '/').replace(/\/+/g, '/')
+  if (!raw) return ''
+  const absolute = raw.startsWith('/')
+  const parts: string[] = []
+  for (const part of raw.split('/')) {
+    if (!part || part === '.') continue
+    if (part === '..') {
+      if (parts.length > 0 && parts[parts.length - 1] !== '..') parts.pop()
+      else if (!absolute) parts.push(part)
+      continue
+    }
+    parts.push(part)
+  }
+  const normalized = `${absolute ? '/' : ''}${parts.join('/')}`
+  return normalized || (absolute ? '/' : '.')
+}
+
+function stablePathHash(value: string): string {
+  let hash = 0x811c9dc5
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return (hash >>> 0).toString(36)
+}
+
+/** URL-safe identity for a derived workspace folder. */
+export function automaticFolderSlug(directory: string): string {
+  const normalized = normalizeWorkspacePath(directory)
+  return `auto-${slugFromPath(normalized)}-${stablePathHash(normalized)}`
+}
+
+function automaticFolderTitle(directory: string): string {
+  const trimmed = directory.replace(/\/+$/, '')
+  const base = trimmed.slice(trimmed.lastIndexOf('/') + 1)
+  return base || directory
+}
+
 /**
  * Build the sidebar folder list.
  *
@@ -312,10 +352,10 @@ export function countUnmatchedActive(
  *   - **Reference** (`peer` set): folder is filled by sessions stamped
  *     with this slug AND originating from the named peer.
  *
- * Sessions route purely by stamps. There is no client-side fallback to
- * viewer match rules: matching happens only on the owning host. A
- * session whose origin disclaims it is never adopted by the viewer; it
- * surfaces via `discoverProjects` / `countUnmatchedActive` only.
+ * Stamped sessions route purely by their origin's authoritative project
+ * assignment. Visible unstamped sessions that do not match an owned local
+ * project are appended in derived folders keyed by origin host and normalized
+ * `workspace_root || cwd`; this is presentation-only and never writes config.
  *
  * Empty folders still render: the entry is in projects.json by user
  * intent, the empty state is informative ("No sessions on workstation
@@ -417,6 +457,46 @@ export function buildProjectFolders(
     })
   }
 
+  // Automatic folders are deliberately derived after configured folders:
+  // projects.json remains authoritative for membership and ordering. A local
+  // session that already matches an owned rule is omitted while its owner
+  // reconciles the stamp, preventing a transient duplicate folder.
+  const automatic = new Map<string, { host: string; directory: string; sessions: Session[] }>()
+  for (const s of sessions) {
+    if (s.project_slug || (!s.alive && s.resumable !== true)) continue
+    const host = s.peer ?? ''
+    if ((!host || isLocalPeer?.(host)) && matchSession(s, projects)) continue
+    const directory = normalizeWorkspacePath(s.workspace_root || s.cwd)
+    if (!directory) continue
+    const key = `${host}\0${directory}`
+    let group = automatic.get(key)
+    if (!group) {
+      group = { host, directory, sessions: [] }
+      automatic.set(key, group)
+    }
+    group.sessions.push(s)
+  }
+
+  const automaticGroups = [...automatic.values()].sort((a, b) => {
+    if (!a.host && b.host) return -1
+    if (a.host && !b.host) return 1
+    const host = a.host.localeCompare(b.host)
+    return host || a.directory.localeCompare(b.directory)
+  })
+  for (const group of automaticGroups) {
+    group.sessions.sort(compareFolderSessions)
+    const slug = automaticFolderSlug(group.directory)
+    folders.push({
+      key: `auto::${group.host}::${group.directory}`,
+      slug,
+      name: automaticFolderTitle(group.directory),
+      peer: group.host || undefined,
+      launchCwd: group.directory,
+      automatic: true,
+      sessions: group.sessions,
+    })
+  }
+
   return folders
 }
 
@@ -455,18 +535,34 @@ export function projectAvailability(
 /**
  * Sort key for a session inside a folder.
  *
- * Stamps are now the sole authority for both folder membership and
- * ordering: every session that lands in a folder is stamped, and its
- * `project_index` reflects the owning host's authoritative position
- * (the index in projects.json `Sessions[]`). Ties are unlikely (the
- * server hands out distinct indices) but we fall back to `created_at`
- * then `id` so the order is deterministic across snapshot re-emits.
+ * Triage tier wins first: unread/attention, error, working, then the
+ * idle/resumable remainder. Within a tier, stamped sessions retain the
+ * owning host's authoritative `project_index`; automatic-folder sessions
+ * use recent activity. Timestamp and id fallbacks keep every result stable.
  */
-function compareFolderSessions(a: Session, b: Session): number {
-  const idx = (a.project_index ?? 0) - (b.project_index ?? 0)
-  if (idx !== 0) return idx
-  const dt = new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-  if (dt !== 0) return dt
+export function compareFolderSessions(a: Session, b: Session): number {
+  const tier = (s: Session): number => {
+    if (s.unread) return 0
+    if (s.status?.error) return 1
+    if (s.status?.working) return 2
+    return 3
+  }
+  const tierDelta = tier(a) - tier(b)
+  if (tierDelta !== 0) return tierDelta
+
+  const aStamped = a.project_slug !== undefined && a.project_index !== undefined
+  const bStamped = b.project_slug !== undefined && b.project_index !== undefined
+  if (aStamped && bStamped) {
+    const indexDelta = a.project_index! - b.project_index!
+    if (indexDelta !== 0) return indexDelta
+  } else if (aStamped !== bStamped) {
+    return aStamped ? -1 : 1
+  }
+
+  const activity = (s: Session): number =>
+    new Date(s.last_activity_at || s.created_at || 0).getTime()
+  const recentDelta = activity(b) - activity(a)
+  if (recentDelta !== 0) return recentDelta
   return a.id.localeCompare(b.id)
 }
 

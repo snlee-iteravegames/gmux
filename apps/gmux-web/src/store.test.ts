@@ -65,9 +65,17 @@ describe('filteredSessions reactivity to the URL query string', () => {
     urlSearch.value = '?cwd=/home/user/projects/beta'
     expect(filteredSessions.value.map(s => s.id)).toEqual(['b'])
 
+    // Automatic folders scope by normalized workspace_root when present.
+    _rawSessions.value = [
+      ..._rawSessions.value,
+      makeSession({ id: 'c', cwd: '/tmp/worktree', workspace_root: '/home/user/projects/gamma/' }),
+    ]
+    urlSearch.value = '?cwd=/home/user/projects/gamma'
+    expect(filteredSessions.value.map(s => s.id)).toEqual(['c'])
+
     // Clearing the query restores the full list.
     urlSearch.value = ''
-    expect(filteredSessions.value.map(s => s.id)).toEqual(['a', 'b'])
+    expect(filteredSessions.value.map(s => s.id)).toEqual(['a', 'b', 'c'])
   })
 })
 
@@ -670,11 +678,18 @@ describe('unreadCount (sidebar-only attention blip)', () => {
     urlPath.value = '/'
   })
 
-  it('excludes discovered (unstamped) sessions even when alive + unread', () => {
+  it('excludes unstamped sessions awaiting a configured project assignment', () => {
     _rawSessions.value = [
-      makeSession({ id: 'disc', cwd: '/work', alive: true, unread: true }), // no project_slug
+      makeSession({ id: 'disc', cwd: '/work', alive: true, unread: true }),
     ]
     expect(unreadCount.value).toBe(0)
+  })
+
+  it('counts unread sessions rendered in automatic folders', () => {
+    _rawSessions.value = [
+      makeSession({ id: 'auto', cwd: '/elsewhere', alive: true, unread: true }),
+    ]
+    expect(unreadCount.value).toBe(1)
   })
 
   it('counts alive + unread sessions stamped into a folder', () => {

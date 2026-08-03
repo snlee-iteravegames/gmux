@@ -122,12 +122,12 @@ graph TD
 - **Script probes** — drop a bash script in `~/.config/gmux/probes/`, it runs against each matching directory and returns JSON. Five lines gets you custom folder intelligence.
 
 ### UI
-- **Triage-first** — sessions sorted by what needs attention, not alphabetically
-- **Automatic grouping** — sessions sharing a working directory group into folders, no manual organization
-- **Header bar** — contextual metadata and actions for the selected session
-- **Mobile responsive** — same URL on your phone, tap a session, type a steering message, done
-- **URL scoping** — `?project=myapp` filters to one project. Bookmark it for a per-project browser tab.
-- **Nord dark theme** — designed for long sessions, Inter + JetBrains Mono typography
+- **Triage-first sidebar** — within each folder, unread sessions come first, then errors, working sessions, and idle or resumable sessions
+- **Automatic folders** — unstamped sessions sharing a normalized workspace root (or cwd) on the same origin host group automatically, without changing `projects.json`
+- **Selected-session header** — contextual metadata and actions stay visible for the selected terminal
+- **Mobile responsive** — the same scoped URL works on desktop or phone for selecting a session and sending input
+- **URL scoping** — `?project=myapp` and `?cwd=/path` filter the existing session view and remain bookmarkable
+- **Canonical Nord theme** — Polar Night, Snow Storm, Frost, and Aurora colors with locally bundled Inter UI and JetBrains Mono terminal typography
 
 ### Architecture
 - **Runner-authoritative** — gmux is the source of truth, gmuxd is a rebuildable cache

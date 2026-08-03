@@ -240,7 +240,9 @@ function FolderGroup({
       folder.peer,
       (name) => localPeerNames.value.has(name),
     )
-    if (visibleKeys.length > 0) {
+    // Automatic folders are derived UI only; never persist their order to
+    // projects.json. Their triage/activity ordering returns on the next update.
+    if (!folder.automatic && visibleKeys.length > 0) {
       reorderSessions(folder.slug, visibleKeys, folder.peer)
     }
     setDrag(null)
@@ -249,7 +251,9 @@ function FolderGroup({
   const visible = folder.sessions.filter(s => s.alive || s.resumable)
   const displayItems = drag ? reorder(visible, drag.from, drag.over) : visible
   const isCurrent = currentKey === folder.key
-  const href = folder.peer ? `/@${folder.peer}/${folder.slug}` : `/${folder.slug}`
+  const href = folder.automatic
+    ? `/?cwd=${encodeURIComponent(folder.launchCwd ?? '')}`
+    : folder.peer ? `/@${folder.peer}/${folder.slug}` : `/${folder.slug}`
   // Folder spans multiple hosts iff its sessions don't all share the
   // same .peer value. In practice this is the devcontainer case: a
   // local project's folder containing both parent-local sessions
@@ -267,6 +271,8 @@ function FolderGroup({
             ? `Host “${folder.peer}” isn't a connected or manually-added host — it may have been renamed or removed. Open Settings → Hosts to remap or remove it.`
             : folder.missing
             ? `${folder.name} no longer exists on ${folder.peer}; remove via the home page`
+            : folder.automatic
+            ? `Filter to ${folder.launchCwd}`
             : `Open ${folder.name} hub`}
           onClick={onClick}
         >

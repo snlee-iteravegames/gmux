@@ -337,9 +337,24 @@ describe('viewToPath', () => {
     expect(viewToPath({ kind: 'session', sessionId: 'gone' }, projects, sessions)).toBeNull()
   })
 
-  it('session view for unmatched session -> null', () => {
-    const orphan = makeSession({ id: 'orphan', cwd: '/nowhere', kind: 'pi' })
-    expect(viewToPath({ kind: 'session', sessionId: 'orphan' }, projects, [orphan])).toBeNull()
+  it('session view for an unstamped workspace uses an automatic folder path', () => {
+    const orphan = makeSession({ id: 'orphan', cwd: '/nowhere', kind: 'pi', slug: 'orphan' })
+    const path = viewToPath({ kind: 'session', sessionId: 'orphan' }, projects, [orphan])
+    expect(path).toMatch(/^\/auto-nowhere-[a-z0-9]+\/pi\/orphan$/)
+    expect(resolveViewFromPath(path!, projects, [orphan])).toEqual({
+      kind: 'session', sessionId: 'orphan',
+    })
+  })
+
+  it('keeps automatic folders scoped to the origin host', () => {
+    const remote = makeSession({
+      id: 'orphan@tower', cwd: '/nowhere', kind: 'pi', slug: 'orphan', peer: 'tower',
+    })
+    const path = viewToPath({ kind: 'session', sessionId: remote.id }, projects, [remote])
+    expect(path).toMatch(/^\/@tower\/auto-nowhere-[a-z0-9]+\/pi\/orphan$/)
+    expect(resolveViewFromPath(path!, projects, [remote])).toEqual({
+      kind: 'session', sessionId: remote.id,
+    })
   })
 
   it('peer-owned project hub view -> /@<owner>/<slug>', () => {

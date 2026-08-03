@@ -1,19 +1,14 @@
 /* Self-hosted fonts via @fontsource. No external network requests at runtime. */
 
-/* Fira Code — code blocks and terminal */
-@import '@fontsource/fira-code/400.css';
-@import '@fontsource/fira-code/500.css';
+/* Inter — UI, labels, and branding */
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/inter/700.css';
 
-/* Source Sans 3 — body text */
-@import '@fontsource/source-sans-3/400.css';
-@import '@fontsource/source-sans-3/500.css';
-@import '@fontsource/source-sans-3/600.css';
-@import '@fontsource/source-sans-3/700.css';
-
-/* Instrument Sans — logo/branding */
-@import '@fontsource/instrument-sans/700.css';
-
-/* JetBrains Mono italic — fallback for Fira Code italic (which has none) */
+/* JetBrains Mono — terminal and code, including native italics */
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/500.css';
 @import '@fontsource/jetbrains-mono/400-italic.css';
 @import '@fontsource/jetbrains-mono/500-italic.css';
 
@@ -31,7 +26,7 @@
  *
  * unicode-range pins the @font-face to Nerd Font icon code points (kept in
  * sync with scripts/build-nerd-font-subset.sh). Without it the browser would
- * treat this font as a candidate for *any* glyph Fira Code lacks — e.g. CJK
+ * treat this font as a candidate for *any* glyph JetBrains Mono lacks — e.g. CJK
  * or emoji in terminal output — and fetch the 490 KB woff2 even when no icon
  * glyph is ever shown.
  */

@@ -4,7 +4,13 @@
 // no side effects or signal dependencies.
 
 import type { Session, ProjectItem } from './types'
-import { matchSession } from './projects'
+import { automaticFolderSlug, matchSession, normalizeWorkspacePath } from './projects'
+
+function isInAutomaticFolder(session: Session, slug: string, peer?: string): boolean {
+  if (session.project_slug || (session.peer ?? '') !== (peer ?? '')) return false
+  const directory = normalizeWorkspacePath(session.workspace_root || session.cwd)
+  return automaticFolderSlug(directory) === slug
+}
 
 // --- URL parsing ---
 
@@ -96,6 +102,7 @@ export function resolveSessionFromPath(
   sessions: Session[],
 ): string | null {
   if (!parsed.project) return null
+  const projectSlug = parsed.project
 
   // Sessions belonging to the addressed project (ADR 0002):
   //  - Peer-owned project: stamp matches `(peer, project_slug)`.
@@ -106,15 +113,18 @@ export function resolveSessionFromPath(
   const filterHost = parsed.host
   const projectSessions = sessions.filter(s => {
     if (parsed.projectPeer) {
-      // Peer-owned project: trust the stamp.
+      // Peer-owned configured project, or a derived folder on that host.
       if (s.peer !== parsed.projectPeer) return false
-      if (s.project_slug !== parsed.project) return false
+      const claimedHere = s.project_slug === projectSlug
+      const automaticHere = isInAutomaticFolder(s, projectSlug, parsed.projectPeer)
+      if (!claimedHere && !automaticHere) return false
     } else {
-      // Local project: claimed-local OR disclaimed-adopted.
-      const claimedHere = !s.peer && s.project_slug === parsed.project
+      // Local project: claimed-local, disclaimed-adopted, or a derived folder.
+      const claimedHere = !s.peer && s.project_slug === projectSlug
       const adoptedHere = !s.project_slug
-        && matchSession(s, projects)?.slug === parsed.project
-      if (!claimedHere && !adoptedHere) return false
+        && matchSession(s, projects)?.slug === projectSlug
+      const automaticHere = !s.peer && isInAutomaticFolder(s, projectSlug)
+      if (!claimedHere && !adoptedHere && !automaticHere) return false
     }
     if (filterHost !== undefined && s.peer !== filterHost) return false
     if (filterHost === undefined && !parsed.projectPeer && s.peer) return false
@@ -124,7 +134,9 @@ export function resolveSessionFromPath(
   // For local projects we still require the project to exist in the
   // viewer's projects list. Peer-owned projects are valid as long as
   // they have at least one matching session in view.
-  if (!parsed.projectPeer && !projects.find(p => p.slug === parsed.project)) {
+  if (!parsed.projectPeer
+    && !projects.find(p => p.slug === projectSlug)
+    && !projectSessions.some(s => isInAutomaticFolder(s, projectSlug))) {
     return null
   }
   if (parsed.projectPeer && projectSessions.length === 0) {
@@ -211,12 +223,16 @@ export function resolveViewFromPath(
     // Peer-owned: project exists iff at least one session carries the
     // matching `(peer, slug)` stamp. We don't sync peer projects
     // separately (ADR 0002); empty peer projects don't render.
-    const hasOne = sessions.some(
-      s => s.peer === parsed.projectPeer && s.project_slug === parsed.project,
+    const hasOne = sessions.some(s =>
+      s.peer === parsed.projectPeer
+      && (s.project_slug === parsed.project
+        || isInAutomaticFolder(s, parsed.project!, parsed.projectPeer)),
     )
     if (!hasOne) return { kind: 'home' }
   } else {
-    if (!projects.find(p => p.slug === parsed.project)) return { kind: 'home' }
+    const configured = projects.find(p => p.slug === parsed.project)
+    const automatic = sessions.some(s => !s.peer && isInAutomaticFolder(s, parsed.project!))
+    if (!configured && !automatic) return { kind: 'home' }
   }
 
   const projectView: View = {
@@ -265,8 +281,9 @@ export function viewToPath(
       }
       // Disclaimed: viewer's match rules decide the local folder.
       const project = matchSession(sess, projects)
-      if (!project) return null
-      return sessionPath(project.slug, sess)
+      if (project) return sessionPath(project.slug, sess)
+      const directory = normalizeWorkspacePath(sess.workspace_root || sess.cwd)
+      return sessionPath(automaticFolderSlug(directory), sess, sess.peer)
     }
   }
 }

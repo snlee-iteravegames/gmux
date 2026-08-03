@@ -18,7 +18,7 @@ import type { Session, ProjectItem, DiscoveredProject, PeerInfo, PeerProject, La
 import type { View } from './routing'
 import { resolveViewFromPath, viewToPath } from './routing'
 import { navigateWithReload } from './version-watch'
-import { buildProjectFolders, discoverProjects } from './projects'
+import { buildProjectFolders, discoverProjects, normalizeWorkspacePath } from './projects'
 import { resolveReferences, removeReferenceItems, removeHostReferenceItems, refKey, type UnresolvedHost } from './references'
 
 import { fetchFrontendConfig, buildTerminalOptions, resolveKeybinds, type ResolvedKeybind } from './config'
@@ -297,15 +297,14 @@ function sortDiscovered(rows: DiscoveredProject[]): DiscoveredProject[] {
 
 // ── Peer appearance: unique prefix + deterministic color ─────────────────────
 
-/** 6-color palette: [foreground, background] pairs for dark backgrounds.
- *  Hues chosen for visual distinction and to avoid muddy tones. */
+/** Nord [foreground, background] pairs for deterministic host identity. */
 const PEER_PALETTE: [string, string][] = [
-  ['oklch(72% 0.11 195)', 'oklch(25% 0.04 195)'], // teal
-  ['oklch(72% 0.12 55)',  'oklch(25% 0.04 55)'],   // amber
-  ['oklch(72% 0.10 285)', 'oklch(25% 0.04 285)'], // violet
-  ['oklch(72% 0.12 25)',  'oklch(25% 0.04 25)'],   // coral
-  ['oklch(72% 0.10 230)', 'oklch(25% 0.04 230)'], // blue
-  ['oklch(72% 0.10 340)', 'oklch(25% 0.04 340)'], // rose
+  ['#8fbcbb', '#3b4252'], // frost teal
+  ['#ebcb8b', '#3b4252'], // aurora yellow
+  ['#b48ead', '#3b4252'], // aurora purple
+  ['#d08770', '#3b4252'], // aurora orange
+  ['#81a1c1', '#3b4252'], // frost blue
+  ['#bf616a', '#3b4252'], // aurora red
 ]
 
 /** Simple string hash (djb2) mapped to palette index. */
@@ -499,8 +498,14 @@ export const filteredSessions = computed(() => {
   const cwdFilter = params.get('cwd')
   if (!project && !cwdFilter) return sessions.value
   return sessions.value.filter(s => {
-    if (project && !s.cwd.toLowerCase().includes(project.toLowerCase())) return false
-    if (cwdFilter && !s.cwd.startsWith(cwdFilter)) return false
+    const workspace = normalizeWorkspacePath(s.workspace_root || s.cwd)
+    if (project) {
+      const needle = project.toLowerCase()
+      if (!s.cwd.toLowerCase().includes(needle) && !workspace.toLowerCase().includes(needle)) return false
+    }
+    if (cwdFilter
+      && !normalizeWorkspacePath(s.cwd).startsWith(normalizeWorkspacePath(cwdFilter))
+      && !workspace.startsWith(normalizeWorkspacePath(cwdFilter))) return false
     return true
   })
 })
@@ -634,12 +639,9 @@ export const backgroundActivity = computed((): DotState => {
 /** Count of unread sessions (excluding selected).
  *
  * Folder-derived rather than read off the raw `sessions` set, so the
- * attention blip counts only sessions stamped into a project in
- * projects.json (owned project or resolved reference) — discovered
- * (unstamped/unreferenced) sessions render nowhere in the sidebar and
- * must not ping for attention. `buildProjectFolders` buckets each
- * session into at most one folder, so summing across folders needs no
- * dedup.
+ * attention blip follows exactly what can render in configured or automatic
+ * sidebar folders. `buildProjectFolders` buckets each session into at most
+ * one folder, so summing across folders needs no dedup.
  *
  * Built from the *unfiltered* session set (`foldersFrom(sessions)`),
  * not the visible `folders` (which honor the ?project=/?cwd= view
@@ -1242,6 +1244,10 @@ export function navigate(url: string, replace?: boolean) {
  * the session or its containing project hasn't loaded yet.
  */
 export function navigateToSession(sessionId: string, replace?: boolean): boolean {
+  const session = sessions.value.find(s => s.id === sessionId)
+  // Until projects load, an unstamped session may still belong to a configured
+  // folder; do not prematurely serialize it as an automatic workspace folder.
+  if (session && !session.project_slug && !worldLoaded.value && projects.value.length === 0) return false
   const path = viewToPath(
     { kind: 'session', sessionId },
     projects.value,
