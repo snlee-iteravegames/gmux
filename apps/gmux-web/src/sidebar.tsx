@@ -133,6 +133,41 @@ function SessionItem({
   const dotState = (selected && (effectiveDotState === 'error' || effectiveDotState === 'unread')) ? 'none' : effectiveDotState
   const arrival = useArrivalPulse(dotState)
   const sleeping = !session.alive && session.resumable
+  const stateKind = unavailable
+    ? 'offline'
+    : session.unread
+      ? 'unread'
+      : session.status?.error
+        ? 'error'
+        : resuming || session.status?.working
+          ? 'working'
+          : effectiveDotState === 'active' || effectiveDotState === 'fading'
+            ? 'active'
+            : sleeping
+              ? 'resumable'
+              : session.alive
+                ? 'idle'
+                : 'exited'
+  const stateLabel = unavailable
+    ? 'Offline'
+    : session.status?.label
+      || (session.unread
+        ? 'Needs attention'
+        : session.status?.error
+          ? 'Error'
+          : resuming
+            ? 'Resuming'
+            : session.status?.working
+              ? 'Working'
+              : effectiveDotState === 'active' || effectiveDotState === 'fading'
+                ? 'Active'
+                : sleeping
+                  ? 'Resumable'
+                  : session.alive
+                    ? 'Idle'
+                    : session.exit_code == null
+                      ? 'Exited'
+                      : `Exited ${session.exit_code}`)
   // Same conversation file live in another runner (ADR 0011 N:1).
   const duplicateOpen = !!session.session_file && duplicateSessionFiles.value.has(session.session_file)
 
@@ -172,13 +207,11 @@ function SessionItem({
       <div class="session-content">
         <div class="session-title-row">
           <span class="session-title">{session.title}</span>
+          <span class={`session-state-badge ${stateKind}`} title={stateLabel}>{stateLabel}</span>
         </div>
-        {(session.status?.label || duplicateOpen) && (
+        {duplicateOpen && (
           <div class="session-meta">
-            {session.status?.label && <span class="session-status-label">{session.status.label}</span>}
-            {duplicateOpen && (
-              <span class="session-dup-warning" title="This conversation is open in more than one tab">⚠ open elsewhere</span>
-            )}
+            <span class="session-dup-warning" title="This conversation is open in more than one tab">⚠ open elsewhere</span>
           </div>
         )}
       </div>
