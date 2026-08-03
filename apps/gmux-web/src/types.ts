@@ -1,6 +1,8 @@
 // --- Data types ---
 //
-// Pure interfaces for the frontend data model. No logic, no imports.
+// Pure interfaces for the frontend data model. No runtime logic.
+
+import type { DirectoryProbe } from '@gmux/protocol'
 
 export interface SessionStatus {
   label: string
@@ -66,6 +68,15 @@ export interface Session {
   project_index?: number
 }
 
+export type FolderUrgency = 'unread' | 'error' | 'working' | 'idle' | 'resumable' | 'empty'
+
+export interface FolderAggregate {
+  /** Highest-priority raw session state in this folder. */
+  urgency: FolderUrgency
+  /** Sessions that can render in the folder (alive or resumable). */
+  visibleCount: number
+}
+
 export interface Folder {
   /**
    * Stable identity for React keys and selection. Local folders use the
@@ -104,6 +115,10 @@ export interface Folder {
   unresolved?: boolean
   /** Derived from an unstamped session's origin host + workspace directory. */
   automatic?: boolean
+  /** Local directory metadata. Never attached to a peer-owned folder. */
+  probe?: DirectoryProbe
+  /** Raw, selection-independent urgency plus visible session count. */
+  aggregate: FolderAggregate
   sessions: Session[]
 }
 

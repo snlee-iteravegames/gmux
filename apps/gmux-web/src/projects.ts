@@ -4,7 +4,11 @@
 // Builds sidebar folders and project hub topology. Pure functions with
 // no side effects or signal dependencies.
 
-import type { Session, Folder, ProjectItem, PeerInfo, DiscoveredProject } from './types'
+import type { DirectoryProbe, DirectoryProbes } from '@gmux/protocol'
+import type {
+  Session, Folder, FolderAggregate, FolderUrgency,
+  ProjectItem, PeerInfo, DiscoveredProject,
+} from './types'
 
 // --- Remote normalization (mirrors Go NormalizeRemote) ---
 
@@ -340,6 +344,79 @@ function automaticFolderTitle(directory: string): string {
   return base || directory
 }
 
+/** Raw triage state shared by folder sorting and folder aggregation. */
+export function sessionTriageUrgency(session: Session): Exclude<FolderUrgency, 'empty'> {
+  if (session.unread) return 'unread'
+  if (session.status?.error) return 'error'
+  if (session.status?.working) return 'working'
+  return session.alive ? 'idle' : 'resumable'
+}
+
+/** One rank source keeps sorting and aggregate priority from drifting. */
+export function folderUrgencyRank(urgency: FolderUrgency): number {
+  switch (urgency) {
+    case 'unread': return 0
+    case 'error': return 1
+    case 'working': return 2
+    case 'idle':
+    case 'resumable': return 3
+    case 'empty': return 4
+  }
+}
+
+export function buildFolderAggregate(sessions: Session[]): FolderAggregate {
+  const visible = sessions.filter(s => s.alive || s.resumable === true)
+  if (visible.length === 0) return { urgency: 'empty', visibleCount: 0 }
+
+  let urgency = sessionTriageUrgency(visible[0])
+  for (const session of visible.slice(1)) {
+    const next = sessionTriageUrgency(session)
+    const rankDelta = folderUrgencyRank(next) - folderUrgencyRank(urgency)
+    // Idle and resumable share the same triage tier. Prefer idle for the
+    // aggregate when either is currently alive, otherwise show resumable.
+    if (rankDelta < 0 || (rankDelta === 0 && next === 'idle')) urgency = next
+  }
+  return { urgency, visibleCount: visible.length }
+}
+
+/**
+ * Match a UI path to the daemon's canonical-absolute probe map.
+ * Session/project paths are normally home-canonicalized (`~/...`) while probe
+ * keys must remain absolute for filesystem work. Exact normalized paths win;
+ * a tilde path falls back to one unambiguous absolute suffix match.
+ */
+export function directoryProbeForPath(
+  path: string | undefined,
+  directoryProbes: Readonly<DirectoryProbes> | undefined,
+): DirectoryProbe | undefined {
+  if (!path || !directoryProbes) return undefined
+  const candidate = normalizeWorkspacePath(path)
+  if (!candidate) return undefined
+
+  const entries = Object.entries(directoryProbes)
+  const exact = entries.find(([key]) => normalizeWorkspacePath(key) === candidate)
+  if (exact) return exact[1]
+
+  if (!candidate.startsWith('~/')) return undefined
+  const homeSuffix = candidate.slice(1)
+  const suffixMatches = entries.filter(([key]) => {
+    const normalizedKey = normalizeWorkspacePath(key)
+    return normalizedKey.startsWith('/') && normalizedKey.endsWith(homeSuffix)
+  })
+  return suffixMatches.length === 1 ? suffixMatches[0][1] : undefined
+}
+
+function probeForLocalFolder(
+  candidates: Array<string | undefined>,
+  directoryProbes: Readonly<DirectoryProbes> | undefined,
+): DirectoryProbe | undefined {
+  for (const candidate of candidates) {
+    const probe = directoryProbeForPath(candidate, directoryProbes)
+    if (probe) return probe
+  }
+  return undefined
+}
+
 /**
  * Build the sidebar folder list.
  *
@@ -377,6 +454,7 @@ export function buildProjectFolders(
   // current name and whether it's in the roster at all. When omitted,
   // references resolve to their stored name (legacy behavior). (refs #270)
   resolveRef?: (peer: string, slug: string) => { effectivePeer: string; resolved: boolean } | undefined,
+  directoryProbes?: Readonly<DirectoryProbes>,
 ): Folder[] {
   // Bucket every stamped session by `${ownerPeer}::${slug}`.
   // ownerPeer is '' for sessions owned by the viewer (local sessions,
@@ -445,6 +523,9 @@ export function buildProjectFolders(
         }
       }
     }
+    const localWorkspaceCandidates = visible
+      .filter(session => !session.peer)
+      .map(session => session.workspace_root || session.cwd)
     folders.push({
       key: `${ownerPeer}::${project.slug}`,
       slug: project.slug,
@@ -453,6 +534,10 @@ export function buildProjectFolders(
       launchCwd,
       missing: missing || undefined,
       unresolved: unresolved || undefined,
+      probe: ownerPeer === ''
+        ? probeForLocalFolder([launchCwd, ...localWorkspaceCandidates], directoryProbes)
+        : undefined,
+      aggregate: buildFolderAggregate(visible),
       sessions: visible,
     })
   }
@@ -493,6 +578,10 @@ export function buildProjectFolders(
       peer: group.host || undefined,
       launchCwd: group.directory,
       automatic: true,
+      probe: group.host === ''
+        ? directoryProbeForPath(group.directory, directoryProbes)
+        : undefined,
+      aggregate: buildFolderAggregate(group.sessions),
       sessions: group.sessions,
     })
   }
@@ -541,13 +630,8 @@ export function projectAvailability(
  * use recent activity. Timestamp and id fallbacks keep every result stable.
  */
 export function compareFolderSessions(a: Session, b: Session): number {
-  const tier = (s: Session): number => {
-    if (s.unread) return 0
-    if (s.status?.error) return 1
-    if (s.status?.working) return 2
-    return 3
-  }
-  const tierDelta = tier(a) - tier(b)
+  const tierDelta = folderUrgencyRank(sessionTriageUrgency(a))
+    - folderUrgencyRank(sessionTriageUrgency(b))
   if (tierDelta !== 0) return tierDelta
 
   const aStamped = a.project_slug !== undefined && a.project_index !== undefined

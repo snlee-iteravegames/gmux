@@ -8,7 +8,7 @@ import {
   navigateToSession, setNavigate,
   applyPending, _rawSessions, _rawWorld, _setRawWorld, _pendingMutations,
   toUISession, localHostLabel, parseConnectURL, unreadCount, discovered,
-  view, duplicateSessionFiles,
+  view, duplicateSessionFiles, parseDirectoryProbes,
 } from './store'
 import { SessionSchema } from '@gmux/protocol'
 import type { PendingMutation } from './store'
@@ -40,12 +40,32 @@ function makeSession(overrides: Partial<Session> & { id: string }): Session {
 // Reset signal state between tests.
 beforeEach(() => {
   _rawSessions.value = []
-  _setRawWorld({ projects: [], peers: [] })
+  _setRawWorld({ projects: [], peers: [], directoryProbes: undefined })
   _pendingMutations.value = []
   sessionsLoaded.value = false
   worldLoaded.value = false
   urlPath.value = '/'
   urlSearch.value = ''
+})
+
+describe('directory probe world parsing', () => {
+  it('accepts omission for older servers and peers', () => {
+    expect(parseDirectoryProbes(undefined)).toBeUndefined()
+  })
+
+  it('parses known statuses and rejects malformed maps safely', () => {
+    expect(parseDirectoryProbes({
+      '/work/app': {
+        scripts: [{ id: 'ci', label: 'CI', value: 'passing', status: 'success' }],
+      },
+    })?.['/work/app'].scripts?.[0].status).toBe('success')
+
+    expect(parseDirectoryProbes({
+      '/work/app': {
+        scripts: [{ id: 'ci', label: 'CI', value: 'unknown', status: 'urgent' }],
+      },
+    })).toBeUndefined()
+  })
 })
 
 describe('filteredSessions reactivity to the URL query string', () => {

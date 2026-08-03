@@ -281,9 +281,10 @@ body {
   align-items: center;
   padding: 5px 12px 5px 14px;
   user-select: none;
-  gap: 6px;
+  gap: 7px;
   cursor: pointer;
   transition: background 0.1s;
+  min-width: 0;
 }
 .folder-header:hover {
   background: var(--bg-hover);
@@ -413,18 +414,94 @@ body {
   to { opacity: 1; transform: translateY(0); }
 }
 
+.folder-heading-content {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
 .folder-name {
+  display: block;
   font-size: 12px;
   font-weight: 600;
   color: var(--text);
-  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   text-decoration: none;
 }
 
+.folder-aggregate-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 8px;
+  background: var(--text-muted);
+  opacity: 0.8;
+}
+.folder-aggregate-dot.unread { background: var(--unread); opacity: 1; }
+.folder-aggregate-dot.error { background: var(--status-error); opacity: 1; }
+.folder-aggregate-dot.working {
+  background: transparent;
+  border: 1.5px solid var(--accent);
+  opacity: 1;
+}
+.folder-aggregate-dot.idle { background: var(--status-connected); }
+.folder-aggregate-dot.resumable {
+  background: transparent;
+  border: 1px solid var(--text-muted);
+  opacity: 0.55;
+}
+.folder-aggregate-dot.empty { opacity: 0.25; }
 
+.folder-visible-count {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+.folder-probe-metadata {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.folder-probe-item {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: inherit;
+}
+.folder-probe-item + .folder-probe-item::before {
+  content: '·';
+  margin-right: 5px;
+  color: var(--text-muted);
+  opacity: 0.55;
+}
+.folder-probe-link { text-decoration: none; }
+.folder-probe-link:hover { text-decoration: underline; }
+.folder-probe-metadata.hub-folder-probe {
+  margin-top: 6px;
+  max-width: min(100%, 720px);
+  font-size: 10px;
+}
+.probe-status-neutral { color: var(--text-muted); }
+.probe-status-info { color: var(--accent); }
+.probe-status-success { color: var(--status-connected); }
+.probe-status-warning { color: var(--nord13); }
+.probe-status-error { color: var(--status-error); }
 
 .folder-sessions {
   overflow: hidden;

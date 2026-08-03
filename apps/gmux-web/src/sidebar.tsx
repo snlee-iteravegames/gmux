@@ -19,6 +19,7 @@ import {
   type DotState,
 } from './store'
 import { HostSuffix } from './host-suffix'
+import { FolderProbeMetadata } from './folder-probe'
 import type { Session, Folder } from './types'
 
 // ── Types ──
@@ -294,28 +295,39 @@ function FolderGroup({
   // sessions agree, per-row markers are noise.
   const folderPeers = new Set(visible.map(s => s.peer ?? ''))
   const mixedHosts = folderPeers.size > 1
+  const aggregateLabel = `${folder.aggregate.visibleCount} visible session${folder.aggregate.visibleCount === 1 ? '' : 's'}, ${folder.aggregate.urgency}`
   return (
     <div class="folder">
-      <div class="folder-header">
-        <a
-          class={`folder-name${isCurrent ? ' current' : ''}${folder.missing ? ' missing' : ''}${folder.unresolved ? ' unresolved' : ''}`}
-          href={href}
-          title={folder.unresolved
-            ? `Host “${folder.peer}” isn't a connected or manually-added host — it may have been renamed or removed. Open Settings → Hosts to remap or remove it.`
-            : folder.missing
-            ? `${folder.name} no longer exists on ${folder.peer}; remove via the home page`
-            : folder.automatic
-            ? `Filter to ${folder.launchCwd}`
-            : `Open ${folder.name} hub`}
-          onClick={onClick}
-        >
-          {folder.name}
-          <HostSuffix peer={folder.peer ?? localHostLabel.value} local={!folder.peer} />
-          {folder.missing && <span class="folder-missing-icon" title="Project missing on peer">?</span>}
-          {folder.unresolved && (
-            <span class="folder-unresolved-icon" title="Host not found — fix in Settings → Hosts">!</span>
-          )}
-        </a>
+      <div class={`folder-header${isCurrent ? ' current' : ''}`}>
+        <span
+          class={`folder-aggregate-dot ${folder.aggregate.urgency}`}
+          title={aggregateLabel}
+          role="img"
+          aria-label={aggregateLabel}
+        />
+        <div class="folder-heading-content">
+          <a
+            class={`folder-name${isCurrent ? ' current' : ''}${folder.missing ? ' missing' : ''}${folder.unresolved ? ' unresolved' : ''}`}
+            href={href}
+            title={folder.unresolved
+              ? `Host “${folder.peer}” isn't a connected or manually-added host — it may have been renamed or removed. Open Settings → Hosts to remap or remove it.`
+              : folder.missing
+              ? `${folder.name} no longer exists on ${folder.peer}; remove via the home page`
+              : folder.automatic
+              ? `Filter to ${folder.launchCwd}`
+              : `Open ${folder.name} hub`}
+            onClick={onClick}
+          >
+            {folder.name}
+            <HostSuffix peer={folder.peer ?? localHostLabel.value} local={!folder.peer} />
+            {folder.missing && <span class="folder-missing-icon" title="Project missing on peer">?</span>}
+            {folder.unresolved && (
+              <span class="folder-unresolved-icon" title="Host not found — fix in Settings → Hosts">!</span>
+            )}
+          </a>
+          <FolderProbeMetadata probe={folder.probe} />
+        </div>
+        <span class="folder-visible-count" title={aggregateLabel}>{folder.aggregate.visibleCount}</span>
         {!folder.unresolved && (
           <LaunchButton
             sessions={folder.sessions}

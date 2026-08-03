@@ -15,6 +15,8 @@ import {
   discoverProjects,
   countUnmatchedActive,
   projectAvailability,
+  buildFolderAggregate,
+  directoryProbeForPath,
 } from './projects'
 import { makeSession } from './test-helpers'
 
@@ -180,6 +182,40 @@ describe('buildProjectFolders', () => {
     expect(folders[0].launchCwd).toBe('/dev/proj')
   })
 
+  it('joins configured local probes by direct and tilde-normalized paths', () => {
+    const probes = {
+      '/Users/alice/work/app': { git: { branch: 'main', dirty_count: 2 } },
+    }
+    const direct = buildProjectFolders(
+      [{ slug: 'app', match: [{ path: '/Users/alice/work/app' }] }],
+      [], undefined, undefined, undefined, probes,
+    )
+    const tilde = buildProjectFolders(
+      [{ slug: 'app', match: [{ path: '~/work/app' }] }],
+      [], undefined, undefined, undefined, probes,
+    )
+
+    expect(direct[0].probe?.git?.branch).toBe('main')
+    expect(tilde[0].probe?.git?.dirty_count).toBe(2)
+    expect(directoryProbeForPath('~/work/app', {
+      '/Users/alice/work/app': probes['/Users/alice/work/app'],
+      '/Users/bob/work/app': probes['/Users/alice/work/app'],
+    })).toBeUndefined()
+  })
+
+  it('falls back to a representative local workspace for configured folders', () => {
+    const sessions = [makeSession({
+      id: 's1', cwd: '~/worktrees/app-feature', workspace_root: '~/worktrees/app-feature',
+      project_slug: 'app', project_index: 0,
+    })]
+    const folders = buildProjectFolders(
+      [{ slug: 'app', match: [{ path: '~/src/app' }] }],
+      sessions, undefined, undefined, undefined,
+      { '/Users/alice/worktrees/app-feature': { git: { branch: 'feature', dirty_count: 0 } } },
+    )
+    expect(folders[0].probe?.git?.branch).toBe('feature')
+  })
+
   it('drops disclaimed sessions even when their cwd matches a local rule', () => {
     // Under the references model, viewer match rules don't adopt
     // sessions client-side. Only stamps put a session in a folder.
@@ -284,6 +320,37 @@ describe('buildProjectFolders', () => {
       expect(folders.map(f => `${f.peer ?? 'local'}:${f.launchCwd}`)).toEqual([
         'local:/a', 'local:/b', 'a-host:/p', 'z-host:/z',
       ])
+    })
+
+    it('joins automatic local probes and excludes remote folders', () => {
+      const sessions = [
+        makeSession({ id: 'local', cwd: '~/work/app' }),
+        makeSession({ id: 'remote', cwd: '/Users/alice/work/app', peer: 'tower' }),
+      ]
+      const folders = buildProjectFolders(
+        [], sessions, undefined, undefined, undefined,
+        { '/Users/alice/work/app': { git: { branch: 'main', dirty_count: 1 } } },
+      )
+      expect(folders.find(folder => !folder.peer)?.probe?.git?.branch).toBe('main')
+      expect(folders.find(folder => folder.peer === 'tower')?.probe).toBeUndefined()
+    })
+  })
+
+  describe('folder aggregate summary', () => {
+    it('uses unread > error > working > idle/resumable and counts visible sessions', () => {
+      const sessions = [
+        makeSession({ id: 'dead', cwd: '/work', alive: false, resumable: false, unread: true }),
+        makeSession({ id: 'sleep', cwd: '/work', alive: false, resumable: true }),
+        makeSession({ id: 'idle', cwd: '/work' }),
+        makeSession({ id: 'working', cwd: '/work', status: { label: 'working', working: true } }),
+        makeSession({ id: 'error', cwd: '/work', status: { label: 'error', working: false, error: true } }),
+        makeSession({ id: 'unread', cwd: '/work', unread: true }),
+      ]
+      expect(buildFolderAggregate(sessions)).toEqual({ urgency: 'unread', visibleCount: 5 })
+      expect(buildFolderAggregate(sessions.slice(1, 5))).toEqual({ urgency: 'error', visibleCount: 4 })
+      expect(buildFolderAggregate(sessions.slice(1, 4))).toEqual({ urgency: 'working', visibleCount: 3 })
+      expect(buildFolderAggregate(sessions.slice(1, 3))).toEqual({ urgency: 'idle', visibleCount: 2 })
+      expect(buildFolderAggregate(sessions.slice(1, 2))).toEqual({ urgency: 'resumable', visibleCount: 1 })
     })
   })
 

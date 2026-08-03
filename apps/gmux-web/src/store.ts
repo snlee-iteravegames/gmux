@@ -24,7 +24,8 @@ import { resolveReferences, removeReferenceItems, removeHostReferenceItems, refK
 import { fetchFrontendConfig, buildTerminalOptions, resolveKeybinds, type ResolvedKeybind } from './config'
 import { MOCK_SESSIONS, MOCK_PROJECTS, MOCK_PEERS, MOCK_HEALTH } from './mock-data/index'
 import type { ResolvedTerminalOptions } from './settings-schema'
-import type { Session as ProtocolSession } from '@gmux/protocol'
+import { DirectoryProbesSchema } from '@gmux/protocol'
+import type { DirectoryProbes, Session as ProtocolSession } from '@gmux/protocol'
 
 // ── HealthData type (used by both raw signal and consumers) ─────────────────
 
@@ -76,6 +77,8 @@ export interface RawWorld {
    * are discovered client-side; see the `discovered` computed.
    */
   peerDiscovered: Record<string, DiscoveredProject[]>
+  /** Optional local-only metadata keyed by canonical absolute workspace path. */
+  directoryProbes?: DirectoryProbes
 }
 
 export const _rawSessions = signal<Session[]>([])
@@ -94,6 +97,13 @@ export const _rawWorld = signal<RawWorld>({
  * whole bundle every time. */
 export function _setRawWorld(patch: Partial<RawWorld>) {
   _rawWorld.value = { ..._rawWorld.value, ...patch }
+}
+
+/** Parse the optional probe extension without making legacy world payloads fail. */
+export function parseDirectoryProbes(value: unknown): DirectoryProbes | undefined {
+  if (value === undefined) return undefined
+  const parsed = DirectoryProbesSchema.safeParse(value)
+  return parsed.success ? parsed.data : undefined
 }
 
 // ── Pending mutations (optimistic overlay; ADR 0001) ───────────────────────
@@ -547,6 +557,7 @@ function foldersFrom(ss: Session[]): Folder[] {
     (name) => localPeerNames.value.has(name),
     _rawWorld.value.peerProjects,
     (peer, slug) => resolvedReferences.value.resolution.get(refKey(peer, slug)),
+    _rawWorld.value.directoryProbes,
   )
 }
 
@@ -1355,6 +1366,11 @@ export function initStore(): () => void {
         default_launcher?: string
         peer_projects?: Record<string, PeerProject[]>
         peer_discovered?: Record<string, DiscoveredProject[]>
+        directory_probes?: unknown
+      }
+      const directoryProbes = parseDirectoryProbes(env.directory_probes)
+      if (env.directory_probes !== undefined && directoryProbes === undefined) {
+        console.warn('snapshot.world: invalid directory_probes omitted')
       }
       batch(() => {
         _setRawWorld({
@@ -1365,6 +1381,7 @@ export function initStore(): () => void {
           defaultLauncher: env.default_launcher ?? 'shell',
           peerProjects: env.peer_projects ?? {},
           peerDiscovered: env.peer_discovered ?? {},
+          directoryProbes,
         })
         worldLoaded.value = true
       })

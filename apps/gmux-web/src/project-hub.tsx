@@ -22,12 +22,13 @@ import { buildProjectTopology } from './projects'
 import { sessionPath } from './routing'
 import { LaunchButton } from './launcher'
 import {
-  sessions, projects, peers, localPeerNames, partitionForProject,
+  sessions, projects, peers, folders, localPeerNames, partitionForProject,
   localHostLabel,
 } from './store'
 import { HostSuffix } from './host-suffix'
 import { SessionRow } from './session-row'
 import { Section } from './home'
+import { FolderProbeMetadata } from './folder-probe'
 
 function projectRemote(p: ProjectItem | undefined): string | undefined {
   return p?.match?.find(r => r.remote)?.remote
@@ -60,6 +61,9 @@ export function ProjectHub({ projectSlug, projectPeer, onCloseSession }: Project
   )
   const allSessions = hosts.flatMap(h => h.folders.flatMap(f => f.sessions))
   const remote = projectRemote(project)
+  const folder = folders.value.find(item =>
+    item.slug === projectSlug && (item.peer ?? '') === (projectPeer ?? ''),
+  )
 
   // Adaptive cwd disambiguator: a project whose sessions all live in
   // one cwd shows that cwd as a subtitle (clean, no repetition); a
@@ -117,6 +121,7 @@ export function ProjectHub({ projectSlug, projectPeer, onCloseSession }: Project
             {remote && <span class="hub-remote">{remote}</span>}
           </div>
         )}
+        <FolderProbeMetadata probe={folder?.probe} className="hub-folder-probe" />
       </header>
 
       {allSessions.length === 0 ? (
