@@ -220,12 +220,12 @@ export type ResolvedTerminalOptions =
 // ── Default theme colors ──
 
 export const DEFAULT_THEME_COLORS: ITheme = {
-  background: '#2e3440',
+  background: '#080b0f',
   foreground: '#d8dee9',
   cursor: '#d8dee9',
-  cursorAccent: '#2e3440',
-  selectionBackground: '#434c5ecc',
-  black: '#3b4252',
+  cursorAccent: '#080b0f',
+  selectionBackground: '#3a4655cc',
+  black: '#0c1117',
   red: '#bf616a',
   green: '#a3be8c',
   yellow: '#ebcb8b',

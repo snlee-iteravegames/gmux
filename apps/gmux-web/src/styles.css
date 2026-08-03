@@ -11,8 +11,8 @@ code {
 }
 
 :root {
-  /* Canonical Nord palette: Polar Night, Snow Storm, Frost, Aurora. */
-  --nord0: #2e3440;
+  /* Nord accents and typography on neutral near-black surfaces. */
+  --nord0: #080b0f;
   --nord1: #3b4252;
   --nord2: #434c5e;
   --nord3: #4c566a;
@@ -29,17 +29,17 @@ code {
   --nord14: #a3be8c;
   --nord15: #b48ead;
 
-  /* Existing semantic tokens mapped exclusively to Nord colors. */
-  --bg: var(--nord0);
-  --bg-sidebar: var(--nord1);
-  --bg-surface: var(--nord1);
-  --bg-hover: var(--nord2);
-  --bg-selected: var(--nord3);
+  /* Neutral surfaces match the near-black dashboard shown in the product samples. */
+  --bg: #080b0f;
+  --bg-sidebar: #0c1117;
+  --bg-surface: #151a21;
+  --bg-hover: #1b222c;
+  --bg-selected: #202a35;
   --text: var(--nord6);
   --text-secondary: var(--nord4);
   --text-muted: var(--nord4);
-  --border: var(--nord2);
-  --border-strong: var(--nord3);
+  --border: #2b3542;
+  --border-strong: #3a4655;
   --accent: var(--nord8);
   --unread: var(--nord9);
   --active: var(--nord3);

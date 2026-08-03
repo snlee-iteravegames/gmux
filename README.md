@@ -127,7 +127,7 @@ graph TD
 - **Selected-session header** — contextual metadata and actions stay visible for the selected terminal
 - **Mobile responsive** — the same scoped URL works on desktop or phone for selecting a session and sending input
 - **URL scoping** — `?project=myapp` and `?cwd=/path` filter the existing session view and remain bookmarkable
-- **Canonical Nord theme** — Polar Night, Snow Storm, Frost, and Aurora colors with locally bundled Inter UI and JetBrains Mono terminal typography
+- **Near-black dark theme** — neutral black surfaces with Nord Frost and Aurora accents, plus locally bundled Inter UI and JetBrains Mono terminal typography
 
 ### Architecture
 - **Runner-authoritative** — gmux is the source of truth, gmuxd is a rebuildable cache

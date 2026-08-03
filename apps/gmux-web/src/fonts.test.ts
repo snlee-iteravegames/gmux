@@ -16,7 +16,7 @@ const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.me
  *    ~1.15 MB Symbols font instead of the subset would more than double the
  *    app's font payload.
  */
-describe('local UI fonts and Nord palette', () => {
+describe('local UI fonts and dark palette', () => {
   it('bundles Inter for UI and JetBrains Mono for code without legacy fonts', () => {
     expect(css).toContain("@fontsource/inter/400.css")
     expect(css).toContain("@fontsource/jetbrains-mono/400.css")
@@ -30,14 +30,14 @@ describe('local UI fonts and Nord palette', () => {
     expect(packageJson.dependencies).not.toHaveProperty('@fontsource/fira-code')
   })
 
-  it('defines every canonical Nord color and removes custom OKLCH literals', () => {
-    const nord = [
-      '#2e3440', '#3b4252', '#434c5e', '#4c566a',
+  it('defines near-black surfaces with Nord accents and removes custom OKLCH literals', () => {
+    const palette = [
+      '#080b0f', '#0c1117', '#151a21', '#1b222c', '#202a35',
       '#d8dee9', '#e5e9f0', '#eceff4', '#8fbcbb',
       '#88c0d0', '#81a1c1', '#5e81ac', '#bf616a',
       '#d08770', '#ebcb8b', '#a3be8c', '#b48ead',
     ]
-    for (const color of nord) expect(styles).toContain(color)
+    for (const color of palette) expect(styles).toContain(color)
     expect(styles).not.toContain('oklch(')
   })
 })
