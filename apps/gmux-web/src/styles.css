@@ -1592,7 +1592,9 @@ body {
   justify-content: space-between;
   padding: 0 16px;
   gap: 12px;
-  border-bottom: 1px solid var(--border);
+  background: var(--bg-sidebar);
+  border-bottom: 1px solid var(--border-strong);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--nord0) 45%, transparent);
   flex-shrink: 0;
   /* overflow must NOT be hidden here — the session menu drops below the header */
   overflow: visible;
@@ -1632,9 +1634,21 @@ body {
 .main-header-meta {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 7px;
+  min-width: 0;
   font-size: 12px;
   color: var(--text-muted);
+}
+
+.main-header-chip {
+  padding: 2px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 
 .main-header-cwd {
@@ -1654,6 +1668,7 @@ body {
   color: var(--text-secondary);
 }
 
+.main-header-status.unread  { color: var(--unread); }
 .main-header-status.working { color: var(--accent); }
 .main-header-status.error   { color: var(--status-error); }
 
@@ -1663,29 +1678,35 @@ body {
   position: relative;
 }
 
-/* Trigger: icon button in the same style as .session-close-btn */
+/* Explicit action trigger: discoverable on desktop, icon-only on mobile. */
 .session-menu-trigger {
   position: relative;
-  width: 26px;
-  height: 26px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-muted);
+  height: 28px;
+  padding: 0 8px 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.1s, color 0.1s;
+  gap: 3px;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
   flex-shrink: 0;
 }
 
 .session-menu-trigger:hover {
   background: var(--bg-hover);
+  border-color: var(--accent);
   color: var(--text);
 }
 
-
+.session-menu-trigger-label {
+  font-family: 'Inter', sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+}
 
 .session-menu-icon {
   font-size: 16px;
@@ -2186,6 +2207,15 @@ body {
 
   .main-header-status {
     font-size: 11px;
+  }
+
+  .session-menu-trigger {
+    width: 28px;
+    padding: 0;
+  }
+
+  .session-menu-trigger-label {
+    display: none;
   }
 
   .terminal-container .xterm {

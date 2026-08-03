@@ -79,6 +79,28 @@ function MainHeader({ session, onRestart }: {
   }
 
   const shortCwd = session.cwd.replace(/^\/home\/[^/]+/, '~')
+  const version = session.runner_version
+    ? `v${session.runner_version}`
+    : session.binary_hash?.slice(0, 8) || 'unknown'
+  const statusKind = session.unread
+    ? 'unread'
+    : session.status?.error
+      ? 'error'
+      : session.status?.working
+        ? 'working'
+        : 'idle'
+  const statusLabel = session.status?.label
+    || (session.unread
+      ? 'Needs attention'
+      : session.status?.error
+        ? 'Error'
+        : session.status?.working
+          ? 'Working'
+          : session.alive
+            ? 'Idle'
+            : session.exit_code == null
+              ? 'Exited'
+              : `Exited ${session.exit_code}`)
 
   return (
     <div class={`main-header ${keyboardOpen.value ? 'keyboard-collapsed' : ''}`}>
@@ -87,19 +109,19 @@ function MainHeader({ session, onRestart }: {
           {session.title}
         </div>
         <div class="main-header-meta">
-          <span class="main-header-cwd">{shortCwd}</span>
+          <span class="main-header-chip">{session.kind}</span>
+          <span class="main-header-cwd" title={session.cwd}>{shortCwd}</span>
+          <span class="main-header-chip">{version}</span>
         </div>
       </div>
       <div class="main-header-right">
-        {session.status?.label && (
-          <div class={`main-header-status ${session.status.error ? 'error' : session.status.working ? 'working' : ''}`}>
-            <span
-              class={`session-dot ${session.status.error ? 'error' : session.status.working ? 'working' : 'idle'}`}
-              style={{ width: 5, height: 5 }}
-            />
-            {session.status.label}
-          </div>
-        )}
+        <div class={`main-header-status ${statusKind}`}>
+          <span
+            class={`session-dot ${statusKind}`}
+            style={{ width: 6, height: 6 }}
+          />
+          {statusLabel}
+        </div>
         <SessionMenu session={session} onRestart={onRestart} />
       </div>
     </div>
@@ -156,6 +178,7 @@ function SessionMenu({ session, onRestart }: {
         title="Session actions"
         aria-expanded={open}
       >
+        <span class="session-menu-trigger-label">Actions</span>
         <span class="session-menu-icon">⋮</span>
         {staleKind && <span class="session-menu-badge" />}
       </button>
