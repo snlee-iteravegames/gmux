@@ -16,6 +16,8 @@ import (
 	"github.com/gmuxapp/gmux/packages/adapter"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/probes"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/projects"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/unixipc"
 )
@@ -449,8 +451,9 @@ func TestSnapshotPumpRoute(t *testing.T) {
 		{"session-upsert", true, false},
 		{"session-remove", true, false},
 
-		// Peer status only changes the world bundle.
+		// Peer and directory-probe status only change the world bundle.
 		{"peer-status", false, true},
+		{"directory-probes-update", false, true},
 
 		// projects-update fires both kinds. Regression guard: prior
 		// versions of the pump routed projects-update only to the
@@ -475,6 +478,53 @@ func TestSnapshotPumpRoute(t *testing.T) {
 					tc.eventType, gotSessions, gotWorld, tc.wantSessions, tc.wantWorld)
 			}
 		})
+	}
+}
+
+func TestComposeProjectsDataIncludesDirectoryProbes(t *testing.T) {
+	root := t.TempDir()
+	state := &projects.State{Items: []projects.Item{{
+		Slug:  "local",
+		Match: []projects.MatchRule{{Path: root}},
+	}}}
+	probeMap := map[string]probes.DirectoryProbe{
+		root: {Git: &probes.GitProbe{Branch: "main", DirtyCount: 2}},
+	}
+	payload := composeProjectsData(state, nil, probeMap)
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := decoded["directory_probes"]; !ok {
+		t.Fatalf("GET /v1/projects data omitted directory_probes: %s", encoded)
+	}
+	if !strings.Contains(string(decoded["directory_probes"]), `"dirty_count":2`) {
+		t.Fatalf("unexpected directory_probes JSON: %s", decoded["directory_probes"])
+	}
+}
+
+func TestCollectDirectoryProbeTargetsExcludesReferencesAndPeerSessions(t *testing.T) {
+	local := t.TempDir()
+	remoteConfigured := t.TempDir()
+	remoteSession := t.TempDir()
+	state := &projects.State{Items: []projects.Item{
+		{Slug: "local", Match: []projects.MatchRule{{Path: local}}},
+		{Slug: "remote", Peer: "tower", Match: []projects.MatchRule{{Path: remoteConfigured}}},
+	}}
+	canonicalLocal, err := filepath.EvalSymlinks(local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := collectDirectoryProbeTargets(state, []store.Session{
+		{ID: "local", Cwd: local},
+		{ID: "remote", Peer: "tower", WorkspaceRoot: remoteSession},
+	})
+	if len(got) != 1 || got[0] != canonicalLocal {
+		t.Fatalf("targets = %#v, want only %q", got, canonicalLocal)
 	}
 }
 

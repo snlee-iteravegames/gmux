@@ -4,6 +4,7 @@ import {
   SessionSchema,
   successEnvelope,
   SessionStatusSchema,
+  DirectoryProbePayloadSchema,
 } from './index.js'
 
 describe('protocol schemas', () => {
@@ -69,5 +70,40 @@ describe('protocol schemas', () => {
     const Schema = successEnvelope(SessionStatusSchema)
     const parsed = Schema.parse({ ok: true, data: { label: 'test', working: false } })
     expect(parsed.data.label).toBe('test')
+  })
+
+  it('parses optional directory probes on projects data and snapshot world', () => {
+    const payload = DirectoryProbePayloadSchema.parse({
+      projects: [],
+      directory_probes: {
+        '/Users/lee/Workspace/gmux': {
+          git: { branch: 'main', dirty_count: 2 },
+          pr: { number: 42, status: 'open', url: 'https://example.com/pr/42' },
+          scripts: [{
+            id: 'ci', label: 'CI', value: 'passing', status: 'success',
+            url: 'https://example.com/actions',
+          }],
+        },
+      },
+    })
+
+    expect(payload.directory_probes?.['/Users/lee/Workspace/gmux'].git?.dirty_count).toBe(2)
+    expect(payload.projects).toEqual([])
+  })
+
+  it('accepts legacy payloads without directory probes', () => {
+    expect(DirectoryProbePayloadSchema.parse({ configured: [] }).directory_probes).toBeUndefined()
+    expect(DirectoryProbePayloadSchema.parse({ projects: [] }).directory_probes).toBeUndefined()
+  })
+
+  it('rejects unknown script statuses', () => {
+    const result = DirectoryProbePayloadSchema.safeParse({
+      directory_probes: {
+        '/work/app': {
+          scripts: [{ id: 'ci', label: 'CI', value: '???', status: 'urgent' }],
+        },
+      },
+    })
+    expect(result.success).toBe(false)
   })
 })

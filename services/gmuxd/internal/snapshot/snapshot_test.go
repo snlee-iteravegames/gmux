@@ -101,6 +101,7 @@ func TestWorldPayload_MarshalsAllFields(t *testing.T) {
 		Health:          map[string]any{"hostname": "node-a"},
 		Launchers:       []map[string]any{{"id": "shell"}},
 		DefaultLauncher: "shell",
+		DirectoryProbes: map[string]any{"/work/gmux": map[string]any{"git": map[string]any{"branch": "main", "dirty_count": 0}}},
 	}
 	b, err := json.Marshal(p)
 	if err != nil {
@@ -110,7 +111,7 @@ func TestWorldPayload_MarshalsAllFields(t *testing.T) {
 	if err := json.Unmarshal(b, &got); err != nil {
 		t.Fatal(err)
 	}
-	for _, k := range []string{"projects", "peers", "health", "launchers", "default_launcher"} {
+	for _, k := range []string{"projects", "peers", "health", "launchers", "default_launcher", "directory_probes"} {
 		if _, ok := got[k]; !ok {
 			t.Errorf("missing key %q in %s", k, b)
 		}

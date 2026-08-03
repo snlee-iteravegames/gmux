@@ -38,6 +38,7 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/peerstore"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/presence"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/probes"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/projects"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionfiles"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sessionmeta"
@@ -631,6 +632,18 @@ func serve(stderr io.Writer) int {
 	// auto-assignment of sessions to projects.
 	projectMgr := projects.NewManager(stateDir)
 
+	// Directory probes are local runtime state. Refresh returns cached data
+	// immediately and performs bounded command execution asynchronously; a
+	// changed result reuses the existing world-snapshot broadcast path.
+	probeMgr := probes.NewManager(probes.DefaultConfig(), func() {
+		sessions.Broadcast(store.Event{Type: "directory-probes-update"})
+	})
+	defer probeMgr.Close()
+	directoryProbesForState := func(state *projects.State) map[string]probes.DirectoryProbe {
+		targets := collectDirectoryProbeTargets(state, sessions.List())
+		return probeMgr.Refresh(targets)
+	}
+
 	// One-time upgrade: ADR 0008 removed tailscale autodiscovery, so the
 	// hosts it surfaced automatically would otherwise vanish (orphaning
 	// their project references). Migrate the legacy discovery cache into
@@ -754,6 +767,31 @@ func serve(stderr io.Writer) int {
 				Resumable:     s.Resumable,
 				Slug:          s.Slug,
 			})
+		}
+	}()
+
+	// Prime the cache without delaying startup, then refresh at the cache TTL.
+	// This detects git/script changes even while projects and sessions are idle.
+	refreshDirectoryProbes := func() {
+		state, err := projectMgr.Load()
+		if err != nil {
+			return
+		}
+		directoryProbesForState(state)
+	}
+	refreshDirectoryProbes()
+	stopProbeRefresh := make(chan struct{})
+	defer close(stopProbeRefresh)
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				refreshDirectoryProbes()
+			case <-stopProbeRefresh:
+				return
+			}
 		}
 	}()
 
@@ -896,12 +934,8 @@ func serve(stderr io.Writer) int {
 		}
 		sessionInfos := buildSessionInfos(sessions, func(name string) bool { return peerManager != nil && peerManager.IsLocalPeer(name) })
 		writeJSON(w, map[string]any{
-			"ok": true,
-			"data": map[string]any{
-				"configured":             state.Items,
-				"discovered":             state.Discovered(sessionInfos),
-				"unmatched_active_count": state.UnmatchedActiveCount(sessionInfos),
-			},
+			"ok":   true,
+			"data": composeProjectsData(state, sessionInfos, directoryProbesForState(state)),
 		})
 	})
 
@@ -1876,6 +1910,7 @@ func serve(stderr io.Writer) int {
 				DefaultLauncher: launchConfig.DefaultLauncher,
 				PeerProjects:    composePeerProjects(peerManager),
 				PeerDiscovered:  composePeerDiscovered(peerManager),
+				DirectoryProbes: directoryProbesForState(state),
 			}
 		}
 
@@ -2404,7 +2439,7 @@ func snapshotPumpRoute(eventType string) (pushSessions, pushWorld bool) {
 	switch eventType {
 	case "session-upsert", "session-remove":
 		return true, false
-	case "peer-status":
+	case "peer-status", "directory-probes-update":
 		return false, true
 	case "projects-update":
 		return true, true
@@ -2479,6 +2514,43 @@ func sessionLastActive(s store.Session) string {
 		return s.LastActivityAt
 	}
 	return s.CreatedAt
+}
+
+// collectDirectoryProbeTargets selects only locally configured paths and
+// sessions owned by this daemon. probes.CollectTargets rejects every non-empty
+// Peer before inspecting cwd, including Local peers such as devcontainers.
+func collectDirectoryProbeTargets(state *projects.State, sessions []store.Session) []string {
+	var configured []string
+	if state != nil {
+		for _, item := range state.Items {
+			if item.IsReference() {
+				continue
+			}
+			for _, rule := range item.Match {
+				if rule.Path != "" {
+					configured = append(configured, rule.Path)
+				}
+			}
+		}
+	}
+	targets := make([]probes.SessionTarget, 0, len(sessions))
+	for _, session := range sessions {
+		targets = append(targets, probes.SessionTarget{
+			Peer:          session.Peer,
+			WorkspaceRoot: session.WorkspaceRoot,
+			Cwd:           session.Cwd,
+		})
+	}
+	return probes.CollectTargets(configured, targets)
+}
+
+func composeProjectsData(state *projects.State, sessions []projects.SessionInfo, directoryProbes map[string]probes.DirectoryProbe) map[string]any {
+	return map[string]any{
+		"configured":             state.Items,
+		"discovered":             state.Discovered(sessions),
+		"unmatched_active_count": state.UnmatchedActiveCount(sessions),
+		"directory_probes":       directoryProbes,
+	}
 }
 
 // buildSessionInfos converts store sessions to project SessionInfo structs.

@@ -4,11 +4,11 @@
 // The protocol has two snapshot kinds plus one bare event:
 //
 //   - snapshot.sessions  full list of owned sessions (replaces the
-//                        per-event session-upsert / session-remove
-//                        stream of protocol 1).
+//     per-event session-upsert / session-remove
+//     stream of protocol 1).
 //   - snapshot.world     bundle of projects, peers, health, launchers
-//                        (replaces projects-update / peer-status).
-//                        Not sent to peer consumers.
+//     (replaces projects-update / peer-status).
+//     Not sent to peer consumers.
 //   - session-activity   bare {id} ping; lossy, not coalesced.
 //
 // Snapshots are composed lazily at emit time by a per-kind coalescer
@@ -83,6 +83,11 @@ type WorldPayload struct {
 	// Empty for peer consumers and for local peers (whose sessions flow
 	// through the parent's local discovery).
 	PeerDiscovered any `json:"peer_discovered,omitempty"`
+
+	// DirectoryProbes is keyed by canonical local workspace path. It is
+	// optional because probe collection is asynchronous and is not forwarded
+	// through peers; browsers omit decorations when no local result exists.
+	DirectoryProbes any `json:"directory_probes,omitempty"`
 }
 
 // ComposeSessions builds a snapshot.sessions payload from the live
