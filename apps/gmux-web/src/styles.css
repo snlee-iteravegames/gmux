@@ -3094,6 +3094,263 @@ body {
   flex: 1;
 }
 
+/* ── Terminal file preview ────────────────────────────────────────────── */
+.preview-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 30;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  padding: 14px;
+  background: color-mix(in srgb, var(--nord0) 72%, transparent);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+
+.preview-panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-sidebar);
+  box-shadow: 0 18px 50px color-mix(in srgb, var(--nord0) 70%, transparent);
+}
+
+.preview-header {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 12px;
+  min-height: 46px;
+  padding: 7px 10px 7px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+
+.preview-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-close {
+  appearance: none;
+  padding: 7px 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-hover);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.preview-close:hover {
+  border-color: var(--nord3);
+  background: var(--bg-selected);
+}
+
+.preview-body {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: var(--bg);
+}
+
+.preview-status {
+  display: grid;
+  min-height: 100%;
+  place-items: center;
+  padding: 24px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.preview-error {
+  color: var(--nord11);
+}
+
+.preview-code,
+.preview-markdown-code {
+  margin: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  tab-size: 4;
+}
+
+.preview-code {
+  display: table;
+  min-width: 100%;
+  padding: 10px 0 24px;
+}
+
+.preview-code-line {
+  display: table-row;
+}
+
+.preview-code-line-highlighted {
+  background: color-mix(in srgb, var(--nord10) 35%, transparent);
+  box-shadow: inset 3px 0 var(--accent);
+}
+
+.preview-line-number,
+.preview-line-text {
+  display: table-cell;
+}
+
+.preview-line-number {
+  position: sticky;
+  left: 0;
+  width: 1%;
+  padding: 0 12px;
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--nord3);
+  text-align: right;
+  user-select: none;
+}
+
+.preview-code-line-highlighted .preview-line-number {
+  background: var(--bg-selected);
+  color: var(--nord8);
+}
+
+.preview-line-text {
+  padding: 0 16px;
+  white-space: pre;
+  user-select: text;
+}
+
+.preview-markdown {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: clamp(20px, 4vw, 48px);
+  color: var(--text-secondary);
+  font-size: 15px;
+  line-height: 1.7;
+  user-select: text;
+}
+
+.preview-markdown h1,
+.preview-markdown h2,
+.preview-markdown h3,
+.preview-markdown h4,
+.preview-markdown h5,
+.preview-markdown h6 {
+  margin: 1.25em 0 0.5em;
+  color: var(--text);
+  line-height: 1.25;
+}
+
+.preview-markdown h1:first-child,
+.preview-markdown h2:first-child,
+.preview-markdown h3:first-child {
+  margin-top: 0;
+}
+
+.preview-markdown p,
+.preview-markdown ul,
+.preview-markdown ol,
+.preview-markdown blockquote,
+.preview-markdown-code {
+  margin: 0 0 1em;
+}
+
+.preview-markdown ul,
+.preview-markdown ol {
+  padding-left: 1.6em;
+}
+
+.preview-markdown blockquote {
+  padding-left: 14px;
+  border-left: 3px solid var(--nord3);
+  color: var(--text-muted);
+}
+
+.preview-markdown a {
+  color: var(--accent);
+}
+
+.preview-markdown code {
+  background: var(--bg-surface);
+}
+
+.preview-markdown-code {
+  overflow-x: auto;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  white-space: pre;
+}
+
+.preview-markdown-code code {
+  padding: 0;
+  background: transparent;
+  font-size: inherit;
+}
+
+.preview-image-wrap {
+  display: grid;
+  min-width: 100%;
+  min-height: 100%;
+  place-items: center;
+  padding: 24px;
+}
+
+.preview-image-wrap img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+@media (max-width: 700px) {
+  .preview-overlay {
+    padding: 0;
+  }
+
+  .preview-panel {
+    border: 0;
+    border-radius: 0;
+  }
+
+  .preview-header {
+    min-height: 42px;
+    padding-left: 10px;
+  }
+
+  .preview-markdown {
+    padding: 18px 16px 36px;
+    font-size: 14px;
+  }
+
+  .preview-line-number {
+    padding: 0 8px;
+  }
+
+  .preview-line-text {
+    padding: 0 10px;
+  }
+}
+
 /* ── Wide control bar: single-row layouts ───────────────────────────────
    Landscape phones and tablets are wide enough to lay the whole key set in
    one row, reclaiming a terminal row. Placed after the base coarse block so

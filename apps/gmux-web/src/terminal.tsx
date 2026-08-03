@@ -16,6 +16,8 @@ import { linkAtPoint, type LinkInfo, openLinkAtPoint } from './terminal-link'
 import { createLongPressRecognizer } from './long-press'
 import { LinkActionSheet } from './link-action-sheet'
 import { TerminalTextSheet } from './terminal-text-sheet'
+import { PreviewPanel } from './preview-panel'
+import { createTerminalFileLinkProvider, type TerminalFileTarget } from './terminal-file-link'
 import { pressedBufferRow, readTerminalText } from './terminal-text'
 import { decideViewportResize, sameSize } from './terminal-resize'
 import { terminalScrolledUp, terminalScrollToBottom } from './store'
@@ -255,6 +257,7 @@ export function TerminalView({
   const [viewportSize, setViewportSize] = useState<TerminalSize | null>(null)
   const [linkSheet, setLinkSheet] = useState<LinkInfo | null>(null)
   const [textSheet, setTextSheet] = useState<{ lines: string[]; anchorRow: number } | null>(null)
+  const [previewTarget, setPreviewTarget] = useState<TerminalFileTarget | null>(null)
   // The paste trigger lives in the attach effect (it reads bracketed-paste
   // mode + clipboard fresh), so bridge it out to the sheet's Paste button
   // via a ref.
@@ -282,6 +285,10 @@ export function TerminalView({
   sessionRef.current = session
   ctrlArmedRef.current = ctrlArmed
   altArmedRef.current = altArmed
+
+  useEffect(() => {
+    setPreviewTarget(null)
+  }, [session.id])
 
   const queueResize = useCallback((size: TerminalSize) => {
     termIoRef.current?.requestResize(size, termEpochRef.current)
@@ -419,7 +426,7 @@ export function TerminalView({
     // falling through from a just-dismissed sheet can't reopen it.
     if (isTouchDevice()) return
     const target = ev.target
-    if (target instanceof HTMLElement && target.closest('button, input, textarea, select, a, label, [role="button"]')) {
+    if (target instanceof HTMLElement && target.closest('button, input, textarea, select, a, label, [role="button"], [role="dialog"]')) {
       return
     }
     focusTerminal()
@@ -480,8 +487,13 @@ export function TerminalView({
     const fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
     term.loadAddon(new ImageAddon())
-    // Detect plain-text URLs in terminal output and make them clickable.
+    // Detect plain-text URLs first so the file provider cannot claim them.
     term.loadAddon(new WebLinksAddon())
+    const fileLinkDisposable = term.registerLinkProvider(createTerminalFileLinkProvider(term, target => {
+      setLinkSheet(null)
+      setTextSheet(null)
+      setPreviewTarget(target)
+    }))
     term.open(containerRef.current)
     loadWebglRenderer(term)
     // The Nerd Font icon fallback loads lazily; refresh the glyph atlas once
@@ -603,7 +615,7 @@ export function TerminalView({
     // Overlays (the link action sheet) render inside the shell; their
     // touches must not arm tap/pan/long-press handling.
     const isInteractiveTarget = (target: EventTarget | null) => target instanceof HTMLElement
-      && !!target.closest('button, input, textarea, select, a, label, [role="button"], .modal-backdrop')
+      && !!target.closest('button, input, textarea, select, a, label, [role="button"], [role="dialog"], .modal-backdrop')
 
     // Long-press on a link → action sheet (copy / open / inspect the
     // real target of OSC 8 hyperlinks). A ≥500ms hold is a distinct
@@ -800,6 +812,7 @@ export function TerminalView({
       shell?.removeEventListener('touchcancel', clearTouchPan, true)
       disposePasteHandler()
       disposeMobileHandler()
+      fileLinkDisposable.dispose()
       osc52Disposable.dispose()
       dataDisposable.dispose()
       scrollDisposable.dispose()
@@ -1058,6 +1071,13 @@ export function TerminalView({
           anchorRow={textSheet.anchorRow}
           onPaste={() => pasteActionRef.current?.()}
           onClose={() => setTextSheet(null)}
+        />
+      )}
+      {previewTarget && (
+        <PreviewPanel
+          session={session}
+          target={previewTarget}
+          onClose={() => setPreviewTarget(null)}
         />
       )}
     </div>

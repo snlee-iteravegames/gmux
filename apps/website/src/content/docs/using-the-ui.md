@@ -103,6 +103,12 @@ If a project has no sessions yet, the hub shows the project's configured path wi
 
 Click a session to attach. You get a full interactive terminal powered by [xterm.js](https://xtermjs.org/). Colors, cursor positioning, mouse support, and images all work. The header bar shows the session title, status label, and a working indicator.
 
+### File previews
+
+Local file paths printed by a session are clickable. Markdown, text/code, PNG, JPEG, GIF, and WebP files open in a read-only preview over the terminal; paths such as `src/main.ts:42` also focus the referenced line. Closing the preview returns to the live terminal without disconnecting it.
+
+For safety, gmux only reads regular files inside the session's working directory or workspace root. It does not execute files, render raw HTML or SVG, or follow paths that escape through `..` or symlinks. File preview from remote peer sessions is not supported yet. Web URLs and OSC 8 hyperlinks keep opening in a browser tab as before.
+
 ## Launching sessions
 
 ### From the command line

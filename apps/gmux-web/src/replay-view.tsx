@@ -8,6 +8,8 @@ import { loadWebglRenderer } from './webgl-renderer'
 import type { Session } from './types'
 import { fetchScrollback, type ScrollbackResult } from './replay-fetch'
 import { JumpToBottom } from './jump-to-bottom'
+import { PreviewPanel } from './preview-panel'
+import { createTerminalFileLinkProvider, type TerminalFileTarget } from './terminal-file-link'
 
 // gmuxd caps scrollback at 1 MiB × 2 files (~2 MiB max). xterm's default
 // scrollback line cap (1000) would silently truncate most of that for
@@ -70,6 +72,7 @@ export function ReplayView({
   const containerRef = useRef<HTMLDivElement>(null)
   const [term, setTerm] = useState<Terminal | null>(null)
   const [state, setState] = useState<ReplayState>({ kind: 'loading' })
+  const [previewTarget, setPreviewTarget] = useState<TerminalFileTarget | null>(null)
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -103,6 +106,7 @@ export function ReplayView({
     term.loadAddon(fit)
     term.loadAddon(new ImageAddon())
     term.loadAddon(new WebLinksAddon())
+    const fileLinkDisposable = term.registerLinkProvider(createTerminalFileLinkProvider(term, setPreviewTarget))
     term.open(containerRef.current)
     loadWebglRenderer(term)
     // Vertical-only fit: use FitAddon's proposal for rows, but keep cols
@@ -128,6 +132,7 @@ export function ReplayView({
     ;(window as any).__gmuxTerm = term
 
     setState({ kind: 'loading' })
+    setPreviewTarget(null)
 
     let cancelled = false
     fetchScrollback(session.id).then((result) => {
@@ -157,6 +162,7 @@ export function ReplayView({
       window.removeEventListener('resize', onResize)
       if ((window as any).__gmuxTerm === term) (window as any).__gmuxTerm = null
       setTerm(null)
+      fileLinkDisposable.dispose()
       term.dispose()
     }
   }, [session.id])
@@ -189,6 +195,13 @@ export function ReplayView({
           <div class="terminal-loading">
             Couldn't load scrollback (HTTP {state.status}: {state.message}).
           </div>
+        )}
+        {previewTarget && (
+          <PreviewPanel
+            session={session}
+            target={previewTarget}
+            onClose={() => setPreviewTarget(null)}
+          />
         )}
       </div>
       <div class="replay-actions">

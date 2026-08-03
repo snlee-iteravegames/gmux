@@ -86,6 +86,7 @@ Sessions are grouped into **folders** by working directory. Each folder heading 
 ### Sessions
 - **Launch anything** — `gmux -- <command>` wraps any process in a managed session
 - **Full terminal** — xterm.js with WebSocket transport, the same terminal emulator as VS Code
+- **Workspace file previews** — click local Markdown, text/code, or image paths in terminal output to inspect them inside gmux without executing files
 - **~1 MiB persisted scrollback** — replays instantly on reconnect, survives runner exit, no lost context
 - **Flicker-free switching** — DEC 2026 synchronized output renders session swaps in a single frame
 - **Session lifecycle** — live status, exit codes, kill from the UI

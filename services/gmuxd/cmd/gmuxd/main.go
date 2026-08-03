@@ -1339,6 +1339,13 @@ func serve(stderr io.Writer) int {
 			action = parts[3]
 		}
 
+		// Preview is intentionally handled before peer forwarding. Remote
+		// session files are never fetched through another gmuxd.
+		if action == "preview" {
+			previewHandler(w, r, sessionID, sessions)
+			return
+		}
+
 		// Route to peer if this is a remote session.
 		if peerManager != nil && action != "" {
 			if peer, originalID := peerManager.FindPeer(sessionID); peer != nil {
