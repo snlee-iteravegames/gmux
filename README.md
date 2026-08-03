@@ -17,10 +17,10 @@ Or download from [GitHub Releases](https://github.com/gmuxapp/gmux/releases).
 ## Quick start
 
 ```bash
-gmux pi                    # launch a coding agent
-gmux pytest --watch        # launch a test watcher
-gmux make build            # or literally any command
-gmux                       # open the UI
+gmux -- pi                 # launch a coding agent
+gmux -- pytest --watch     # launch a test watcher
+gmux -- make build         # or literally any command
+gmux open                  # open the UI
 ```
 
 Open `localhost:8790` — all three sessions are there, grouped by project, with live status indicators. Click one to attach a full terminal. The same xterm.js that powers the VS Code terminal, running in your browser.
@@ -84,7 +84,7 @@ Sessions are grouped into **folders** by working directory. Each folder heading 
 ## Features
 
 ### Sessions
-- **Launch anything** — `gmux <command>` wraps any process in a managed session
+- **Launch anything** — `gmux -- <command>` wraps any process in a managed session
 - **Full terminal** — xterm.js with WebSocket transport, the same terminal emulator as VS Code
 - **~1 MiB persisted scrollback** — replays instantly on reconnect, survives runner exit, no lost context
 - **Flicker-free switching** — DEC 2026 synchronized output renders session swaps in a single frame
@@ -94,7 +94,7 @@ Sessions are grouped into **folders** by working directory. Each folder heading 
 ### Adapters — session-level intelligence
 Adapters teach gmux how to work with specific tools. They're compiled into the binary and selected automatically by command name.
 
-- **Auto-detection** — `gmux pi` recognizes pi and activates the pi adapter. No flags needed.
+- **Auto-detection** — `gmux -- pi` recognizes pi and activates the pi adapter. No flags needed.
 - **Rich status** — adapters report what the child is doing: thinking, waiting for input, tests passing, build failing
 - **Child awareness** — any tool can self-report status via `PUT /status` on `$GMUX_SOCKET`, no adapter required
 - **Graceful fallback** — unknown commands get the shell adapter
@@ -133,7 +133,7 @@ graph TD
 - **Runner-authoritative** — gmux is the source of truth, gmuxd is a rebuildable cache
 - **No external dependencies** — no tmux, no screen, no abduco. Two Go binaries and a web app.
 - **Web-first** — works on desktop, tablet, phone. Same URL everywhere.
-- **Zero config** — run `gmux <command>`, open a browser
+- **Zero config** — run `gmux -- <command>`, open a browser
 
 ## Extensibility
 
@@ -149,8 +149,8 @@ graph TD
 See [CONTRIBUTING.md](CONTRIBUTING.md) for prerequisites and setup.
 
 ```bash
-pnpm install      # JS dependencies
-./dev              # start all services with watch/HMR
+pnpm install                # JS dependencies
+./scripts/dev-server.sh     # start all services with watch/HMR
 ```
 
 ### Monorepo layout

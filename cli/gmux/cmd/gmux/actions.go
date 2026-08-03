@@ -9,26 +9,28 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/gmuxapp/gmux/cli/gmux/internal/localterm"
+	"github.com/gmuxapp/gmux/packages/paths"
 )
 
 // session is the subset of gmuxd's Session model that the CLI cares
 // about. Defined locally to avoid pulling in the gmuxd store package.
 type cliSession struct {
-	ID         string `json:"id"`
-	Peer       string `json:"peer,omitempty"`
-	Cwd        string `json:"cwd,omitempty"`
-	Kind       string `json:"kind"`
-	Alive      bool   `json:"alive"`
-	Pid        int    `json:"pid,omitempty"`
-	Title      string `json:"title,omitempty"`
-	Slug       string `json:"slug,omitempty"`
-	SocketPath string `json:"socket_path,omitempty"`
+	ID         string   `json:"id"`
+	Peer       string   `json:"peer,omitempty"`
+	Cwd        string   `json:"cwd,omitempty"`
+	Kind       string   `json:"kind"`
+	Alive      bool     `json:"alive"`
+	Pid        int      `json:"pid,omitempty"`
+	Title      string   `json:"title,omitempty"`
+	Slug       string   `json:"slug,omitempty"`
+	SocketPath string   `json:"socket_path,omitempty"`
 	Command    []string `json:"command,omitempty"`
-	StartedAt  string `json:"started_at,omitempty"`
-	ExitedAt   string `json:"exited_at,omitempty"`
-	ExitCode   *int   `json:"exit_code,omitempty"`
+	StartedAt  string   `json:"started_at,omitempty"`
+	ExitedAt   string   `json:"exited_at,omitempty"`
+	ExitCode   *int     `json:"exit_code,omitempty"`
 }
 
 // fetchSessions queries gmuxd for the full session list. Starts gmuxd
@@ -348,6 +350,83 @@ func cmdKill(ref string) int {
 		return 1
 	}
 	fmt.Printf("killed %s\n", displayID(sess))
+	return 0
+}
+
+// cmdDismiss implements `gmux dismiss <session-id>`. Unlike the friendly
+// lookup used by interactive actions, dismiss accepts only a complete session
+// ID (with or without the sess- prefix), making it safe for automation.
+//
+// The current XDG_STATE_HOME selects gmuxd's Unix socket. Its local health
+// response supplies the daemon's effective TCP address and bearer token, so
+// callers never need to know a configured port or persist a token themselves.
+func cmdDismiss(ref string) int {
+	if _, ok := normalizeSessionID(ref); !ok {
+		fmt.Fprintf(os.Stderr, "gmux: invalid session id %q\n", ref)
+		return 1
+	}
+	ensureGmuxd()
+	return dismissSession(ref, gmuxdClient(), &http.Client{Timeout: 5 * time.Second}, os.Stdout, os.Stderr)
+}
+
+func normalizeSessionID(ref string) (string, bool) {
+	sessionID := ref
+	if !strings.HasPrefix(sessionID, "sess-") {
+		sessionID = "sess-" + sessionID
+	}
+	return sessionID, paths.IsValidSessionID(sessionID)
+}
+
+func dismissSession(ref string, daemonClient, tcpClient *http.Client, stdout, stderr io.Writer) int {
+	sessionID, ok := normalizeSessionID(ref)
+	if !ok {
+		fmt.Fprintf(stderr, "gmux: invalid session id %q\n", ref)
+		return 1
+	}
+
+	health, err := daemonClient.Get(gmuxdBaseURL() + "/v1/health")
+	if err != nil {
+		fmt.Fprintln(stderr, "gmux: contact gmuxd:", err)
+		return 1
+	}
+	defer health.Body.Close()
+	if health.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(health.Body)
+		fmt.Fprintf(stderr, "gmux: health check failed: %s: %s\n", health.Status, strings.TrimSpace(string(body)))
+		return 1
+	}
+	healthBody, err := io.ReadAll(health.Body)
+	if err != nil {
+		fmt.Fprintln(stderr, "gmux: read gmuxd health:", err)
+		return 1
+	}
+	listen := parseHealthField(healthBody, "listen")
+	token := parseHealthField(healthBody, "auth_token")
+	if listen == "" || token == "" {
+		fmt.Fprintln(stderr, "gmux: gmuxd health response is missing listen address or auth token")
+		return 1
+	}
+
+	url := "http://" + listen + "/v1/sessions/" + sessionID + "/dismiss"
+	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader("{}"))
+	if err != nil {
+		fmt.Fprintln(stderr, "gmux:", err)
+		return 1
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := tcpClient.Do(req)
+	if err != nil {
+		fmt.Fprintln(stderr, "gmux: dismiss:", err)
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		fmt.Fprintf(stderr, "gmux: dismiss failed: %s: %s\n", resp.Status, strings.TrimSpace(string(body)))
+		return 1
+	}
+	fmt.Fprintf(stdout, "dismissed %s\n", sessionID)
 	return 0
 }
 

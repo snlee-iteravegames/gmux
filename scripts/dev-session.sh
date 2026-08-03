@@ -4,9 +4,16 @@
 #
 # Usage:
 #   source scripts/dev-session.sh
-#   gmux-dev bash
+#   gmux-dev -- bash
 
-_GMUX_DEV_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -n "${BASH_VERSION:-}" ]]; then
+  _GMUX_DEV_SCRIPT="${BASH_SOURCE[0]}"
+elif [[ -n "${ZSH_VERSION:-}" ]]; then
+  _GMUX_DEV_SCRIPT="${(%):-%N}"
+else
+  _GMUX_DEV_SCRIPT="$0"
+fi
+_GMUX_DEV_ROOT="$(cd "$(dirname "$_GMUX_DEV_SCRIPT")/.." && pwd)"
 
 if [[ "$(basename "$(dirname "$_GMUX_DEV_ROOT")")" == ".grove" ]]; then
   _GMUX_DEV_INSTANCE="$(basename "$_GMUX_DEV_ROOT")"
@@ -22,10 +29,13 @@ else
 fi
 
 gmux-dev() {
+  # Descendants resolving plain `gmux` must use this checkout, not a stale release.
+  PATH="$_GMUX_DEV_ROOT/scripts/dev-bin:$PATH" \
   GMUX_SOCKET_DIR="$_GMUX_DEV_SOCKET_DIR" \
+  XDG_CONFIG_HOME="$_GMUX_DEV_STATE_DIR/config" \
   XDG_STATE_HOME="$_GMUX_DEV_STATE_DIR/state" \
   PI_CODING_AGENT_DIR="$_GMUX_DEV_STATE_DIR/pi-agent" \
   "$_GMUX_DEV_ROOT/bin/gmux-dev" "$@"
 }
 
-echo "gmux-dev ($_GMUX_DEV_INSTANCE :$_GMUX_DEV_PORT) → gmux-dev <cmd>"
+echo "gmux-dev ($_GMUX_DEV_INSTANCE :$_GMUX_DEV_PORT) → gmux-dev -- <cmd>"

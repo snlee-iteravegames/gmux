@@ -31,6 +31,7 @@ import (
 	"sync"
 
 	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/vt"
 )
 
@@ -266,6 +267,21 @@ func RenderTail(r io.Reader, cols, rows, n int) ([]string, error) {
 		return nil, err
 	}
 
+	return renderTail(raw, cols, rows, n)
+}
+
+// renderTail contains the emulator boundary. Terminal input is untrusted: a
+// malformed scroll region can trigger an upstream emulator panic. Recovering
+// here keeps the HTTP request alive and returns a useful plain-text tail from
+// the same raw bytes instead of an EOF or an empty response.
+func renderTail(raw []byte, cols, rows, n int) (lines []string, err error) {
+	defer func() {
+		if recover() != nil {
+			lines = fallbackTail(raw, n)
+			err = nil
+		}
+	}()
+
 	e := vt.NewEmulator(cols, rows)
 	e.SetScrollbackSize(RenderScrollbackSize)
 	// The emulator writes back responses (e.g. DSR cursor position
@@ -273,18 +289,52 @@ func RenderTail(r io.Reader, cols, rows, n int) ([]string, error) {
 	// write would deadlock our Write below. Drain in the background.
 	drainDone := make(chan struct{})
 	go func() {
+		defer close(drainDone)
+		// A panic in response handling must not take down the process.
+		defer func() { _ = recover() }()
 		_, _ = io.Copy(io.Discard, e)
-		close(drainDone)
 	}()
+	defer func() {
+		_ = e.Close()
+		<-drainDone
+	}()
+
 	if _, err := e.Write(raw); err != nil {
 		return nil, fmt.Errorf("replay through emulator: %w", err)
 	}
 
-	lines := extractLines(e)
+	lines = extractLines(e)
 	if len(lines) > n {
 		lines = lines[len(lines)-n:]
 	}
 	return lines, nil
+}
+
+// fallbackTail strips terminal control sequences without interpreting them,
+// normalizes PTY carriage returns into line boundaries, and returns a bounded
+// line tail. It intentionally preserves printable report markers and text.
+func fallbackTail(raw []byte, n int) []string {
+	plain := ansi.Strip(string(raw))
+	plain = strings.ReplaceAll(plain, "\r\n", "\n")
+	plain = strings.ReplaceAll(plain, "\r", "\n")
+	plain = strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' || r >= ' ' && r != 0x7f {
+			return r
+		}
+		return -1
+	}, plain)
+
+	lines := strings.Split(plain, "\n")
+	for i := range lines {
+		lines[i] = strings.TrimRight(lines[i], " \t")
+	}
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return lines
 }
 
 // extractLines reads the scrollback ring followed by the visible

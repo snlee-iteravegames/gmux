@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -115,6 +119,85 @@ func TestShortID(t *testing.T) {
 			t.Errorf("shortID(%q) = %q, want %q", in, got, want)
 		}
 	}
+}
+
+// --- Dismiss ---
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func dismissHealthClient(listen, token string) *http.Client {
+	body := fmt.Sprintf(`{"ok":true,"data":{"listen":%q,"auth_token":%q}}`, listen, token)
+	return &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Request:    req,
+		}, nil
+	})}
+}
+
+func TestDismissSessionSuccess(t *testing.T) {
+	const token = "test-token"
+	for _, ref := range []string{"abc123", "sess-abc123"} {
+		t.Run(ref, func(t *testing.T) {
+			action := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost {
+					t.Errorf("method = %s, want POST", r.Method)
+				}
+				if r.URL.Path != "/v1/sessions/sess-abc123/dismiss" {
+					t.Errorf("path = %q", r.URL.Path)
+				}
+				if got := r.Header.Get("Authorization"); got != "Bearer "+token {
+					t.Errorf("Authorization = %q", got)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"ok":true,"data":{}}`)
+			}))
+			defer action.Close()
+
+			var stdout, stderr bytes.Buffer
+			listen := strings.TrimPrefix(action.URL, "http://")
+			code := dismissSession(ref, dismissHealthClient(listen, token), action.Client(), &stdout, &stderr)
+			if code != 0 {
+				t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+			}
+			if stdout.String() != "dismissed sess-abc123\n" {
+				t.Errorf("stdout = %q", stdout.String())
+			}
+		})
+	}
+}
+
+func TestDismissSessionErrors(t *testing.T) {
+	for _, ref := range []string{"", "sess-", "../other", "abc/def", "abc@peer"} {
+		t.Run("invalid id "+ref, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := dismissSession(ref, nil, nil, &stdout, &stderr)
+			if code == 0 || !strings.Contains(stderr.String(), "invalid session id") {
+				t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+			}
+		})
+	}
+
+	t.Run("daemon error", func(t *testing.T) {
+		action := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, `{"ok":false,"error":{"message":"session not found"}}`, http.StatusNotFound)
+		}))
+		defer action.Close()
+
+		var stdout, stderr bytes.Buffer
+		listen := strings.TrimPrefix(action.URL, "http://")
+		code := dismissSession("deadbeef", dismissHealthClient(listen, "test-token"), action.Client(), &stdout, &stderr)
+		if code == 0 || !strings.Contains(stderr.String(), "dismiss failed: 404 Not Found") {
+			t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+		}
+	})
 }
 
 // TestBuildSendBody pins the wire-level contract of --send: by default

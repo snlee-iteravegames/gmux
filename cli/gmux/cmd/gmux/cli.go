@@ -12,23 +12,24 @@ import (
 type mode int
 
 const (
-	modeHelp      mode = iota // print usage and exit
-	modeVersion               // print version and exit
-	modeOpen                  // open the web UI
-	modeRun                   // run a command in a new session (gmux -- <cmd>)
-	modeList                  // gmux ls
-	modeAttach                // gmux attach <id>
-	modeTail                  // gmux tail <id>
-	modeKill                  // gmux kill <id>
-	modeSend                  // gmux send <id> <text> [keys...]
-	modeSendKeys              // gmux send-keys -t <id> ... (tmux-compat)
-	modeWait                  // gmux wait <id>
-	modeDaemon                // gmux daemon <start|stop|restart|status|log-path>
-	modeAuth                  // gmux auth
-	modeRemote                // gmux remote
-	modeDumpEnv               // (internal) gmux __dump-env
-	modeCodexHook             // (internal) gmux __codex-hook <Event>
-	modeClaudeHook            // (internal) gmux __claude-hook
+	modeHelp       mode = iota // print usage and exit
+	modeVersion                // print version and exit
+	modeOpen                   // open the web UI
+	modeRun                    // run a command in a new session (gmux -- <cmd>)
+	modeList                   // gmux ls
+	modeAttach                 // gmux attach <id>
+	modeTail                   // gmux tail <id>
+	modeKill                   // gmux kill <id>
+	modeDismiss                // gmux dismiss <session-id>
+	modeSend                   // gmux send <id> <text> [keys...]
+	modeSendKeys               // gmux send-keys -t <id> ... (tmux-compat)
+	modeWait                   // gmux wait <id>
+	modeDaemon                 // gmux daemon <start|stop|restart|status|log-path>
+	modeAuth                   // gmux auth
+	modeRemote                 // gmux remote
+	modeDumpEnv                // (internal) gmux __dump-env
+	modeCodexHook              // (internal) gmux __codex-hook <Event>
+	modeClaudeHook             // (internal) gmux __claude-hook
 )
 
 // command is the fully-parsed CLI invocation. One struct for every
@@ -44,7 +45,7 @@ type command struct {
 	initialCols int      // internal: pre-size PTY width
 	initialRows int      // internal: pre-size PTY height
 
-	// session-addressing verbs (attach/tail/kill/send/send-keys/wait)
+	// session-addressing verbs (attach/tail/kill/dismiss/send/send-keys/wait)
 	ref string // session reference; may carry an @peer suffix
 
 	// ls
@@ -78,7 +79,7 @@ type command struct {
 // "did you mean?" hints and to distinguish a removed flag from a stray
 // command in the error-only migration shim.
 var reservedVerbs = []string{
-	"open", "ls", "attach", "tail", "kill", "send", "send-keys",
+	"open", "ls", "attach", "tail", "kill", "dismiss", "send", "send-keys",
 	"wait", "daemon", "auth", "remote", "version", "help",
 }
 
@@ -153,6 +154,8 @@ func parseCLI(args []string) (*command, error) {
 		return parseRefOnly(modeAttach, "attach", rest)
 	case "kill":
 		return parseRefOnly(modeKill, "kill", rest)
+	case "dismiss":
+		return parseRefOnly(modeDismiss, "dismiss", rest)
 	case "tail":
 		return parseTail(rest)
 	case "send":
@@ -445,6 +448,7 @@ Sessions (local by default; address a peer with <id>@<peer>):
   gmux send-keys -t <id> <keys...>  tmux-compatible key sending
   gmux wait <id> [--timeout N]      block until an agent session is idle
   gmux kill <id>                    terminate a session
+  gmux dismiss <session-id>         terminate and remove a session
 
 UI & pairing:
   gmux open                         open the web UI

@@ -71,6 +71,12 @@ func TestParseCLI(t *testing.T) {
 					t.Errorf("ref = %q", c.ref)
 				}
 			}},
+		{name: "dismiss", args: []string{"dismiss", "sess-abc123"}, wantMode: modeDismiss,
+			check: func(t *testing.T, c *command) {
+				if c.ref != "sess-abc123" {
+					t.Errorf("ref = %q", c.ref)
+				}
+			}},
 
 		{name: "tail defaults to 100 lines", args: []string{"tail", "abc"}, wantMode: modeTail,
 			check: func(t *testing.T, c *command) {
@@ -182,13 +188,15 @@ func TestParseCLIErrors(t *testing.T) {
 		{"open", "extra"},          // open takes no args
 		{"attach"},                 // missing id
 		{"attach", "a", "b"},       // too many
+		{"dismiss"},                // missing id
+		{"dismiss", "a", "b"},      // too many
 		{"tail"},                   // missing id
 		{"tail", "-n", "0", "abc"}, // non-positive count
 		{"wait"},                   // missing id
-		{"send-keys", "C-c"},     // missing -t
-		{"daemon"},               // missing subcommand
-		{"daemon", "frobnicate"}, // unknown subcommand
-		{"ls", "stray"},          // ls takes no positional
+		{"send-keys", "C-c"},       // missing -t
+		{"daemon"},                 // missing subcommand
+		{"daemon", "frobnicate"},   // unknown subcommand
+		{"ls", "stray"},            // ls takes no positional
 	}
 	for _, args := range bad {
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {

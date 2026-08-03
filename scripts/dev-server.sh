@@ -11,7 +11,7 @@
 # Usage: ./scripts/dev-server.sh
 #
 # Then from another terminal:
-#   source scripts/dev-session.sh && gmux-dev <cmd>
+#   source scripts/dev-session.sh && gmux-dev -- <cmd>
 
 set -euo pipefail
 
@@ -136,7 +136,7 @@ echo "  Tailscale: https://$DEV_TS_HOSTNAME.<tailnet>"
 echo "  Sockets:   $DEV_SOCKET_DIR"
 echo ""
 echo "  Launch dev sessions:"
-echo "    source scripts/dev-session.sh && gmux-dev <cmd>"
+echo "    source scripts/dev-session.sh && gmux-dev -- <cmd>"
 echo "══════════════════════════════════════════════════════"
 
 wait

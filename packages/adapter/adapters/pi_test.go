@@ -117,6 +117,7 @@ func TestPiMatchStopsAtDoubleDash(t *testing.T) {
 func TestPiIsPassthrough(t *testing.T) {
 	p := NewPi()
 	passthrough := [][]string{
+		{"pi", "auth"},
 		{"pi", "update"},
 		{"pi", "update", "self"},
 		{"pi", "list"},
@@ -149,6 +150,16 @@ func TestPiIsPassthrough(t *testing.T) {
 		if p.IsPassthrough(args) {
 			t.Errorf("expected session (not passthrough) for %v", args)
 		}
+	}
+}
+
+// Pi 0.83 added `pi auth`; it must stay at argv[1] instead of being shifted
+// behind gmux's extension flag and interpreted as an interactive prompt.
+func TestPiAuthIsPassthrough(t *testing.T) {
+	p := NewPi()
+	args := []string{"pi", "auth", "login"}
+	if !p.IsPassthrough(args) {
+		t.Fatal("pi auth must pass through without session extension injection")
 	}
 }
 

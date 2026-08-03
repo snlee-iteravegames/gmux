@@ -42,6 +42,8 @@ func main() {
 		os.Exit(cmdList(cmd.all, cmd.json))
 	case modeKill:
 		os.Exit(cmdKill(cmd.ref))
+	case modeDismiss:
+		os.Exit(cmdDismiss(cmd.ref))
 	case modeTail:
 		os.Exit(cmdTail(cmd.ref, cmd.tailLines, cmd.raw))
 	case modeAttach:

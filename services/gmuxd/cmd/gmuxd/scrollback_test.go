@@ -254,6 +254,33 @@ func TestBrokerTailParamStripsANSI(t *testing.T) {
 	}
 }
 
+// TestBrokerTailParamSurvivesEmulatorPanic verifies malformed terminal input
+// cannot panic the request goroutine and turn the response into an HTTP EOF.
+// The plain-text fallback must retain completion report markers for callers.
+func TestBrokerTailParamSurvivesEmulatorPanic(t *testing.T) {
+	f := newBrokerFixture(t)
+	f.addSession(t, "sess-1")
+	f.writeScrollback(t, "sess-1", "before\r\n\x1b[1;999r\x1bM[[TEAM_REPORT]]\r\n결론: 완료\r\n[[/TEAM_REPORT]]\r\n")
+
+	resp := f.doQuery(http.MethodGet, "sess-1", "tail=120")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: want 200, got %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	text := string(body)
+	for _, want := range []string{"[[TEAM_REPORT]]", "결론: 완료", "[[/TEAM_REPORT]]"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("fallback body missing %q: %q", want, text)
+		}
+	}
+	if bytes.ContainsRune(body, 0x1b) {
+		t.Errorf("fallback body contains an escape byte: %q", body)
+	}
+}
+
 // TestBrokerTailParamCollapsesCursorOverwrites is the case that
 // justifies replaying through a real emulator instead of byte-tailing.
 // A child that prints "loading...\r" and then "done      \r\n"

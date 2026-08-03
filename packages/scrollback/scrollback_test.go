@@ -509,6 +509,26 @@ func TestRenderTailHandlesCursorMotion(t *testing.T) {
 	}
 }
 
+// TestRenderTailFallsBackWhenEmulatorPanics covers an upstream vt bug where
+// reverse-index with an oversized scroll region indexes beyond the screen.
+// RenderTail must still return ANSI-free report text instead of panicking.
+func TestRenderTailFallsBackWhenEmulatorPanics(t *testing.T) {
+	raw := "before\r\n\x1b[1;999r\x1bM[[TEAM_REPORT]]\r\n결론: 완료\r\n[[/TEAM_REPORT]]\r\n"
+	lines, err := RenderTail(strings.NewReader(raw), 80, 24, 120)
+	if err != nil {
+		t.Fatalf("RenderTail: %v", err)
+	}
+	joined := strings.Join(lines, "\n")
+	for _, want := range []string{"[[TEAM_REPORT]]", "결론: 완료", "[[/TEAM_REPORT]]"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("fallback output missing %q: %q", want, joined)
+		}
+	}
+	if strings.ContainsRune(joined, 0x1b) {
+		t.Errorf("fallback output contains an escape byte: %q", joined)
+	}
+}
+
 // TestRenderTailTrimsBlankRows guards against an idle TUI's empty
 // bottom rows padding the output. The runner's live path trims them;
 // the disk-replay path must do the same so dead-session --tail

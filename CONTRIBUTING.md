@@ -23,11 +23,11 @@ pnpm install          # JS dependencies + moon
 Run all services with watch/HMR:
 
 ```bash
-moon run :dev
+./scripts/dev-server.sh
 ```
 
 This starts:
-- **gmuxd** (`:8790`) — Go, auto-restarts on `.go` changes via watchexec
+- **gmuxd** (`:8791` in the main checkout) — Go, auto-restarts on `.go` changes via watchexec
 - **gmux-web** (`:5173`) — Vite HMR, proxies `/v1/*` and `/ws/*` to gmuxd
 
 **No manual kill needed.** When gmuxd starts, it asks any existing instance to shut down gracefully via the Unix socket before binding.
