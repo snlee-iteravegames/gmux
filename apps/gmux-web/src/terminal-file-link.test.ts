@@ -70,10 +70,11 @@ describe('xterm file link provider', () => {
   test('uses 1-based xterm ranges and activates with path and line', () => {
     const text = 'open src/a.ts:42:5 now'
     const terminal = {
+      cols: 80,
       buffer: {
         active: {
           getLine: (index: number) => index === 6
-            ? { translateToString: () => text }
+            ? { isWrapped: false, translateToString: () => text }
             : undefined,
         },
       },
@@ -93,12 +94,45 @@ describe('xterm file link provider', () => {
     expect(activate).toHaveBeenCalledWith({ path: 'src/a.ts', line: 42 })
   })
 
+  test('keeps a file path clickable across visually wrapped buffer lines', () => {
+    const rows = [
+      { isWrapped: false, text: 'Image: apps/website/' },
+      { isWrapped: true, text: 'src/assets/hero-desk' },
+      { isWrapped: true, text: 'top.png' },
+    ]
+    const terminal = {
+      cols: 20,
+      buffer: {
+        active: {
+          getLine: (index: number) => rows[index]
+            ? { isWrapped: rows[index].isWrapped, translateToString: () => rows[index].text }
+            : undefined,
+        },
+      },
+    } as unknown as Terminal
+    const activate = vi.fn()
+    const provider = createTerminalFileLinkProvider(terminal, activate)
+    let links: ILink[] | undefined
+
+    provider.provideLinks(2, result => { links = result })
+
+    expect(links).toHaveLength(1)
+    expect(links?.[0].text).toBe('apps/website/src/assets/hero-desktop.png')
+    expect(links?.[0].range).toEqual({
+      start: { x: 8, y: 1 },
+      end: { x: 7, y: 3 },
+    })
+    links?.[0].activate({} as MouseEvent, links[0].text)
+    expect(activate).toHaveBeenCalledWith({ path: 'apps/website/src/assets/hero-desktop.png', line: undefined })
+  })
+
   test('returns undefined when the buffer line is absent or has no files', () => {
     const terminal = {
+      cols: 80,
       buffer: {
         active: {
           getLine: (index: number) => index === 0
-            ? { translateToString: () => 'https://example.com' }
+            ? { isWrapped: false, translateToString: () => 'https://example.com' }
             : undefined,
         },
       },

@@ -85,20 +85,46 @@ export function createTerminalFileLinkProvider(
 ): ILinkProvider {
   return {
     provideLinks(bufferLineNumber, callback) {
-      const bufferLine = terminal.buffer.active.getLine(bufferLineNumber - 1)
-      if (!bufferLine) {
+      const buffer = terminal.buffer.active
+      const requestedIndex = bufferLineNumber - 1
+      const requestedLine = buffer.getLine(requestedIndex)
+      if (!requestedLine) {
         callback(undefined)
         return
       }
 
-      const links: ILink[] = findTerminalFileLinks(bufferLine.translateToString(true)).map(match => ({
-        text: match.text,
-        range: {
-          start: { x: match.startIndex + 1, y: bufferLineNumber },
-          end: { x: match.endIndex, y: bufferLineNumber },
-        },
-        activate: () => onActivate({ path: match.path, line: match.line }),
-      }))
+      // xterm stores a visually wrapped command/output line as multiple buffer
+      // lines. Rebuild that logical line so long workspace paths remain one
+      // clickable link even when the sidebar makes the terminal narrow.
+      let firstIndex = requestedIndex
+      while (firstIndex > 0 && buffer.getLine(firstIndex)?.isWrapped) firstIndex--
+      let lastIndex = requestedIndex
+      while (buffer.getLine(lastIndex + 1)?.isWrapped) lastIndex++
+
+      let logicalText = ''
+      for (let index = firstIndex; index <= lastIndex; index++) {
+        const line = buffer.getLine(index)
+        if (!line) break
+        logicalText += line.translateToString(index === lastIndex)
+      }
+
+      const links: ILink[] = findTerminalFileLinks(logicalText)
+        .map(match => {
+          const lastCharacterIndex = match.endIndex - 1
+          const startY = firstIndex + Math.floor(match.startIndex / terminal.cols) + 1
+          const endY = firstIndex + Math.floor(lastCharacterIndex / terminal.cols) + 1
+          return {
+            text: match.text,
+            range: {
+              start: { x: (match.startIndex % terminal.cols) + 1, y: startY },
+              end: { x: (lastCharacterIndex % terminal.cols) + 1, y: endY },
+            },
+            activate: () => onActivate({ path: match.path, line: match.line }),
+          }
+        })
+        // xterm asks providers for the hovered buffer row. Only return links
+        // that actually cross that row, while preserving their full range.
+        .filter(link => bufferLineNumber >= link.range.start.y && bufferLineNumber <= link.range.end.y)
       callback(links.length > 0 ? links : undefined)
     },
   }
