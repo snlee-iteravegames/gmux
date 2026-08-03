@@ -47,11 +47,11 @@ graph LR
     gmuxd -- "HTTP · SSE · WS" --> web
 ```
 
-**`gmux`** wraps any command in a managed session. It allocates a PTY, serves a WebSocket for terminal access, and runs an **adapter** that understands what the child process is doing. A pi session knows when the agent is thinking vs waiting for input. A test runner knows when tests are failing. A generic command gets alive/dead/activity tracking out of the box. With no arguments, it opens the UI in your browser.
+**`gmux`** wraps any command in a managed session. It allocates a PTY, serves a WebSocket for terminal access, and runs an **adapter** that understands what the child process is doing. Built-in pi, Claude Code, and Codex adapters report working, idle, error, and unread transitions; any child can publish a richer label through `PUT /status`. A generic command gets alive/dead/activity tracking out of the box. With no arguments, it opens the UI in your browser.
 
-**`gmuxd`** runs once per machine (auto-started by `gmux`). It discovers sessions via their Unix sockets, caches their state, proxies WebSocket connections, and pushes real-time updates to the browser via SSE. It's stateless — restart it anytime, it rebuilds from what's running.
+**`gmuxd`** runs once per machine (auto-started by `gmux`). It discovers runner-authoritative sessions via their Unix sockets, caches their state, proxies WebSocket connections, and pushes real-time updates to the browser via SSE. Runtime sessions are rebuildable after a restart; project configuration, peer metadata, and bounded scrollback remain persisted.
 
-**`gmux-web`** is the browser UI. The sidebar groups sessions by working directory, with status dots that pulse when something needs attention. The terminal is xterm.js — the same battle-tested terminal emulator that powers VS Code's integrated terminal — with synchronized output for flicker-free session switching and ~1 MiB of persisted scrollback that replays instantly on reconnect.
+**`gmux-web`** is the browser UI. The sidebar groups sessions by working directory, with status dots that pulse when something needs attention. The terminal is xterm.js — the same battle-tested terminal emulator that powers VS Code's integrated terminal — with synchronized output for flicker-free session switching and bounded persisted scrollback (up to roughly 2 MiB per runner) that replays on reconnect.
 
 ## What you see
 
@@ -87,7 +87,7 @@ Sessions are grouped into **folders** by working directory. Each folder heading 
 - **Launch anything** — `gmux -- <command>` wraps any process in a managed session
 - **Full terminal** — xterm.js with WebSocket transport, the same terminal emulator as VS Code
 - **Workspace file previews** — click local Markdown, text/code, or image paths in terminal output to inspect them inside gmux without executing files
-- **~1 MiB persisted scrollback** — replays instantly on reconnect, survives runner exit, no lost context
+- **Bounded persisted scrollback** — up to roughly 2 MiB per runner replays on reconnect and remains available after runner exit
 - **Flicker-free switching** — DEC 2026 synchronized output renders session swaps in a single frame
 - **Session lifecycle** — live status, exit codes, kill from the UI
 - **Reconnecting** — tab away, come back, the terminal is right where you left it
@@ -96,7 +96,7 @@ Sessions are grouped into **folders** by working directory. Each folder heading 
 Adapters teach gmux how to work with specific tools. They're compiled into the binary and selected automatically by command name.
 
 - **Auto-detection** — `gmux -- pi` recognizes pi and activates the pi adapter. No flags needed.
-- **Rich status** — adapters report what the child is doing: thinking, waiting for input, tests passing, build failing
+- **Rich status** — built-in agent adapters report working, idle, error, and unread transitions; children can publish custom labels such as test or build results
 - **Child awareness** — any tool can self-report status via `PUT /status` on `$GMUX_SOCKET`, no adapter required
 - **Graceful fallback** — unknown commands get the shell adapter
 
@@ -120,7 +120,7 @@ graph TD
 
 - **Git** — branch name, dirty file count
 - **GitHub PR** — PR number, status, clickable link
-- **Script probes** — drop a bash script in `~/.config/gmux/probes/`, it runs against each matching directory and returns JSON. Five lines gets you custom folder intelligence.
+- **Script probes** — drop an executable `.sh` file in `~/.config/gmux/probes/`; gmux runs it with a bounded timeout and accepts one JSON object containing `label`, `value`, optional `status`, and optional HTTP(S) `url`
 
 ### UI
 - **Triage-first sidebar** — within each folder, unread sessions come first, then errors, working sessions, and idle or resumable sessions
@@ -141,9 +141,9 @@ graph TD
 | Layer | Mechanism | Runs in | What it does |
 |-------|-----------|---------|--------------|
 | Session | **Adapters** (Go) | gmux | Recognize commands, monitor output, report rich status |
-| Directory | **Probes** (Go or bash) | gmuxd | Observe directories, report git/PR/CI metadata |
+| Directory | **Built-in probes** (git + GitHub CLI) | gmuxd | Report branch, dirty count, and open PR metadata |
 | Child process | **HTTP API** on `$GMUX_SOCKET` | child | Self-report status without any adapter |
-| User scripts | **Script probes** in `~/.config/gmux/probes/` | gmuxd | Custom directory intelligence, no compilation |
+| User scripts | **Executable `.sh` probes** in `~/.config/gmux/probes/` | gmuxd | Return bounded JSON directory intelligence without compilation |
 
 ## Development
 

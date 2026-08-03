@@ -14,7 +14,7 @@ func TestParseCLI(t *testing.T) {
 		wantMode mode
 		check    func(t *testing.T, c *command)
 	}{
-		{name: "no args prints help", args: nil, wantMode: modeHelp},
+		{name: "no args opens UI", args: nil, wantMode: modeOpen},
 		{name: "help verb", args: []string{"help"}, wantMode: modeHelp},
 		{name: "help with trailing word is lenient", args: []string{"help", "send"}, wantMode: modeHelp},
 		{name: "version", args: []string{"version"}, wantMode: modeVersion},

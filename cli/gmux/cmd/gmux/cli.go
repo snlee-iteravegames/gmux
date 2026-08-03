@@ -102,7 +102,7 @@ var removedFlags = map[string]string{
 // parseCLI parses argv (without program name) into a command.
 func parseCLI(args []string) (*command, error) {
 	if len(args) == 0 {
-		return &command{mode: modeHelp}, nil
+		return &command{mode: modeOpen}, nil
 	}
 
 	// Consume leading global flags. Only -d/--detach is global, and it
