@@ -93,13 +93,26 @@ export function createTerminalFileLinkProvider(
         return
       }
 
-      // xterm stores a visually wrapped command/output line as multiple buffer
-      // lines. Rebuild that logical line so long workspace paths remain one
-      // clickable link even when the sidebar makes the terminal narrow.
+      // xterm marks live wraps with isWrapped. A runner snapshot, however,
+      // replays already-rendered rows and cannot preserve that bit. Infer those
+      // continuations only when the previous row fills every column and the
+      // next row starts immediately with a non-space character.
+      const isContinuation = (index: number): boolean => {
+        const line = buffer.getLine(index)
+        const previous = buffer.getLine(index - 1)
+        if (!line || !previous) return false
+        if (line.isWrapped) return true
+        const previousLength = previous.translateToString(false).trimEnd().length
+        return previousLength >= terminal.cols && /^\S/.test(line.translateToString(true))
+      }
+
+      // Bound reconstruction so pathological full-width terminal output cannot
+      // make one hover scan an unbounded amount of scrollback.
+      const maxWrappedRows = 32
       let firstIndex = requestedIndex
-      while (firstIndex > 0 && buffer.getLine(firstIndex)?.isWrapped) firstIndex--
+      while (firstIndex > 0 && requestedIndex - firstIndex < maxWrappedRows - 1 && isContinuation(firstIndex)) firstIndex--
       let lastIndex = requestedIndex
-      while (buffer.getLine(lastIndex + 1)?.isWrapped) lastIndex++
+      while (lastIndex - requestedIndex < maxWrappedRows - 1 && isContinuation(lastIndex + 1)) lastIndex++
 
       let logicalText = ''
       for (let index = firstIndex; index <= lastIndex; index++) {

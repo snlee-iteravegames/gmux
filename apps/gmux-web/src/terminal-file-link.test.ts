@@ -126,6 +126,38 @@ describe('xterm file link provider', () => {
     expect(activate).toHaveBeenCalledWith({ path: 'apps/website/src/assets/hero-desktop.png', line: undefined })
   })
 
+  test('reconstructs wrapped rows replayed from a runner snapshot without isWrapped metadata', () => {
+    const rows = [
+      { isWrapped: false, text: '/tmp/workspace/very-' },
+      { isWrapped: false, text: 'long-directory-name/' },
+      { isWrapped: false, text: 'source.ts:42' },
+    ]
+    const terminal = {
+      cols: 20,
+      buffer: {
+        active: {
+          getLine: (index: number) => rows[index]
+            ? { isWrapped: rows[index].isWrapped, translateToString: () => rows[index].text }
+            : undefined,
+        },
+      },
+    } as unknown as Terminal
+    const activate = vi.fn()
+    const provider = createTerminalFileLinkProvider(terminal, activate)
+    let links: ILink[] | undefined
+
+    provider.provideLinks(1, result => { links = result })
+
+    expect(links).toHaveLength(1)
+    expect(links?.[0].text).toBe('/tmp/workspace/very-long-directory-name/source.ts:42')
+    expect(links?.[0].range).toEqual({
+      start: { x: 1, y: 1 },
+      end: { x: 12, y: 3 },
+    })
+    links?.[0].activate({} as MouseEvent, links[0].text)
+    expect(activate).toHaveBeenCalledWith({ path: '/tmp/workspace/very-long-directory-name/source.ts', line: 42 })
+  })
+
   test('returns undefined when the buffer line is absent or has no files', () => {
     const terminal = {
       cols: 80,
