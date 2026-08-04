@@ -18,9 +18,13 @@ import (
 	"github.com/gmuxapp/gmux/packages/sessionenv"
 )
 
+const gmuxdStartupTimeout = 15 * time.Second
+
 // ensureGmuxd checks if gmuxd is reachable and starts it if not.
 // If a daemon is running but reports a different version, it is replaced
-// so the child process always talks to a compatible daemon.
+// so the child process always talks to a compatible daemon. A cold daemon can
+// spend several seconds indexing conversation history before binding its Unix
+// socket, so callers wait for readiness instead of racing registration/open.
 // Called once at startup — if gmuxd dies later, we don't restart it.
 // Returns true if gmuxd was started (or replaced) by this call.
 func ensureGmuxd() bool {
@@ -35,7 +39,19 @@ func ensureGmuxd() bool {
 	}
 
 	// gmuxd run starts in the foreground; we background it ourselves.
-	return startGmuxd(gmuxdBin, []string{"run"})
+	if !startGmuxd(gmuxdBin, []string{"run"}) {
+		return false
+	}
+
+	deadline := time.Now().Add(gmuxdStartupTimeout)
+	for time.Now().Before(deadline) {
+		if gmuxdHealthy(500 * time.Millisecond) {
+			return true
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	log.Printf("warning: gmuxd did not become ready within %s", gmuxdStartupTimeout)
+	return true
 }
 
 // gmuxdNeedsStart checks the running daemon.
