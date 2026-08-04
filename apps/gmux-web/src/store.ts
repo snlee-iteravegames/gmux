@@ -22,10 +22,13 @@ import { buildProjectFolders, discoverProjects, normalizeWorkspacePath } from '.
 import { resolveReferences, removeReferenceItems, removeHostReferenceItems, refKey, type UnresolvedHost } from './references'
 
 import { fetchFrontendConfig, buildTerminalOptions, resolveKeybinds, type ResolvedKeybind } from './config'
-import { MOCK_SESSIONS, MOCK_PROJECTS, MOCK_PEERS, MOCK_HEALTH } from './mock-data/index'
+import {
+  MOCK_SESSIONS, MOCK_PROJECTS, MOCK_PEERS, MOCK_HEALTH,
+  MOCK_DIRECTORY_PROBES, MOCK_PEER_DIRECTORY_PROBES,
+} from './mock-data/index'
 import type { ResolvedTerminalOptions } from './settings-schema'
-import { DirectoryProbesSchema } from '@gmux/protocol'
-import type { DirectoryProbes, Session as ProtocolSession } from '@gmux/protocol'
+import { DirectoryProbesSchema, PeerDirectoryProbesSchema } from '@gmux/protocol'
+import type { DirectoryProbes, PeerDirectoryProbes, Session as ProtocolSession } from '@gmux/protocol'
 
 // ── HealthData type (used by both raw signal and consumers) ─────────────────
 
@@ -79,6 +82,8 @@ export interface RawWorld {
   peerDiscovered: Record<string, DiscoveredProject[]>
   /** Optional local-only metadata keyed by canonical absolute workspace path. */
   directoryProbes?: DirectoryProbes
+  /** Optional remote metadata isolated by canonical current peer name. */
+  peerDirectoryProbes?: PeerDirectoryProbes
 }
 
 export const _rawSessions = signal<Session[]>([])
@@ -103,6 +108,13 @@ export function _setRawWorld(patch: Partial<RawWorld>) {
 export function parseDirectoryProbes(value: unknown): DirectoryProbes | undefined {
   if (value === undefined) return undefined
   const parsed = DirectoryProbesSchema.safeParse(value)
+  return parsed.success ? parsed.data : undefined
+}
+
+/** Parse the peer-keyed extension independently from the local probe map. */
+export function parsePeerDirectoryProbes(value: unknown): PeerDirectoryProbes | undefined {
+  if (value === undefined) return undefined
+  const parsed = PeerDirectoryProbesSchema.safeParse(value)
   return parsed.success ? parsed.data : undefined
 }
 
@@ -558,6 +570,7 @@ function foldersFrom(ss: Session[]): Folder[] {
     _rawWorld.value.peerProjects,
     (peer, slug) => resolvedReferences.value.resolution.get(refKey(peer, slug)),
     _rawWorld.value.directoryProbes,
+    _rawWorld.value.peerDirectoryProbes,
   )
 }
 
@@ -1282,7 +1295,13 @@ export function initStore(): () => void {
       ? MOCK_SESSIONS.map(s => s.peer === localHost ? { ...s, peer: undefined } : s)
       : [...MOCK_SESSIONS]
     batch(() => {
-      _setRawWorld({ projects: MOCK_PROJECTS, peers: MOCK_PEERS, health: MOCK_HEALTH })
+      _setRawWorld({
+        projects: MOCK_PROJECTS,
+        peers: MOCK_PEERS,
+        health: MOCK_HEALTH,
+        directoryProbes: MOCK_DIRECTORY_PROBES,
+        peerDirectoryProbes: MOCK_PEER_DIRECTORY_PROBES,
+      })
       _rawSessions.value = mockSessions
       sessionsLoaded.value = true
       worldLoaded.value = true
@@ -1367,10 +1386,15 @@ export function initStore(): () => void {
         peer_projects?: Record<string, PeerProject[]>
         peer_discovered?: Record<string, DiscoveredProject[]>
         directory_probes?: unknown
+        peer_directory_probes?: unknown
       }
       const directoryProbes = parseDirectoryProbes(env.directory_probes)
+      const peerDirectoryProbes = parsePeerDirectoryProbes(env.peer_directory_probes)
       if (env.directory_probes !== undefined && directoryProbes === undefined) {
         console.warn('snapshot.world: invalid directory_probes omitted')
+      }
+      if (env.peer_directory_probes !== undefined && peerDirectoryProbes === undefined) {
+        console.warn('snapshot.world: invalid peer_directory_probes omitted')
       }
       batch(() => {
         _setRawWorld({
@@ -1382,6 +1406,7 @@ export function initStore(): () => void {
           peerProjects: env.peer_projects ?? {},
           peerDiscovered: env.peer_discovered ?? {},
           directoryProbes,
+          peerDirectoryProbes,
         })
         worldLoaded.value = true
       })

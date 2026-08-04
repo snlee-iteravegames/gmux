@@ -115,7 +115,7 @@ export interface Folder {
   unresolved?: boolean
   /** Derived from an unstamped session's origin host + workspace directory. */
   automatic?: boolean
-  /** Local directory metadata. Never attached to a peer-owned folder. */
+  /** Directory metadata from the folder owner's isolated probe map. */
   probe?: DirectoryProbe
   /** Raw, selection-independent urgency plus visible session count. */
   aggregate: FolderAggregate

@@ -8,7 +8,7 @@ import {
   navigateToSession, setNavigate,
   applyPending, _rawSessions, _rawWorld, _setRawWorld, _pendingMutations,
   toUISession, localHostLabel, parseConnectURL, unreadCount, discovered,
-  view, duplicateSessionFiles, parseDirectoryProbes,
+  view, duplicateSessionFiles, parseDirectoryProbes, parsePeerDirectoryProbes,
 } from './store'
 import { SessionSchema } from '@gmux/protocol'
 import type { PendingMutation } from './store'
@@ -40,7 +40,9 @@ function makeSession(overrides: Partial<Session> & { id: string }): Session {
 // Reset signal state between tests.
 beforeEach(() => {
   _rawSessions.value = []
-  _setRawWorld({ projects: [], peers: [], directoryProbes: undefined })
+  _setRawWorld({
+    projects: [], peers: [], directoryProbes: undefined, peerDirectoryProbes: undefined,
+  })
   _pendingMutations.value = []
   sessionsLoaded.value = false
   worldLoaded.value = false
@@ -51,6 +53,7 @@ beforeEach(() => {
 describe('directory probe world parsing', () => {
   it('accepts omission for older servers and peers', () => {
     expect(parseDirectoryProbes(undefined)).toBeUndefined()
+    expect(parsePeerDirectoryProbes(undefined)).toBeUndefined()
   })
 
   it('parses known statuses and rejects malformed maps safely', () => {
@@ -64,6 +67,18 @@ describe('directory probe world parsing', () => {
       '/work/app': {
         scripts: [{ id: 'ci', label: 'CI', value: 'unknown', status: 'urgent' }],
       },
+    })).toBeUndefined()
+  })
+
+  it('parses peer maps without flattening peer identity', () => {
+    const parsed = parsePeerDirectoryProbes({
+      tower: { '/work/app': { git: { branch: 'tower', dirty_count: 0 } } },
+      laptop: { '/work/app': { git: { branch: 'laptop', dirty_count: 1 } } },
+    })
+    expect(parsed?.tower['/work/app'].git?.branch).toBe('tower')
+    expect(parsed?.laptop['/work/app'].git?.branch).toBe('laptop')
+    expect(parsePeerDirectoryProbes({
+      tower: { '/work/app': { scripts: [{ id: 'x', label: 'x', value: 'x', status: 'bad' }] } },
     })).toBeUndefined()
   })
 })

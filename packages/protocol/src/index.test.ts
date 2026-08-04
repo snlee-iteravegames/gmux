@@ -91,9 +91,28 @@ describe('protocol schemas', () => {
     expect(payload.projects).toEqual([])
   })
 
+  it('parses peer-isolated directory probes', () => {
+    const payload = DirectoryProbePayloadSchema.parse({
+      projects: [],
+      peer_directory_probes: {
+        tower: {
+          '/home/alice/work/gmux': {
+            git: { branch: 'remote-main', dirty_count: 1 },
+          },
+        },
+      },
+    })
+    expect(payload.peer_directory_probes?.tower['/home/alice/work/gmux'].git?.branch)
+      .toBe('remote-main')
+  })
+
   it('accepts legacy payloads without directory probes', () => {
-    expect(DirectoryProbePayloadSchema.parse({ configured: [] }).directory_probes).toBeUndefined()
-    expect(DirectoryProbePayloadSchema.parse({ projects: [] }).directory_probes).toBeUndefined()
+    const projects = DirectoryProbePayloadSchema.parse({ configured: [] })
+    const world = DirectoryProbePayloadSchema.parse({ projects: [] })
+    expect(projects.directory_probes).toBeUndefined()
+    expect(projects.peer_directory_probes).toBeUndefined()
+    expect(world.directory_probes).toBeUndefined()
+    expect(world.peer_directory_probes).toBeUndefined()
   })
 
   it('rejects unknown script statuses', () => {

@@ -96,12 +96,13 @@ func TestComposeSessions_DeterministicAcrossCalls(t *testing.T) {
 
 func TestWorldPayload_MarshalsAllFields(t *testing.T) {
 	p := WorldPayload{
-		Projects:        []map[string]any{{"slug": "gmux"}},
-		Peers:           []map[string]any{{"name": "tower", "status": "connected"}},
-		Health:          map[string]any{"hostname": "node-a"},
-		Launchers:       []map[string]any{{"id": "shell"}},
-		DefaultLauncher: "shell",
-		DirectoryProbes: map[string]any{"/work/gmux": map[string]any{"git": map[string]any{"branch": "main", "dirty_count": 0}}},
+		Projects:            []map[string]any{{"slug": "gmux"}},
+		Peers:               []map[string]any{{"name": "tower", "status": "connected"}},
+		Health:              map[string]any{"hostname": "node-a"},
+		Launchers:           []map[string]any{{"id": "shell"}},
+		DefaultLauncher:     "shell",
+		DirectoryProbes:     map[string]any{"/work/gmux": map[string]any{"git": map[string]any{"branch": "main", "dirty_count": 0}}},
+		PeerDirectoryProbes: map[string]any{"tower": map[string]any{"/work/gmux": map[string]any{"git": map[string]any{"branch": "remote", "dirty_count": 1}}}},
 	}
 	b, err := json.Marshal(p)
 	if err != nil {
@@ -111,7 +112,7 @@ func TestWorldPayload_MarshalsAllFields(t *testing.T) {
 	if err := json.Unmarshal(b, &got); err != nil {
 		t.Fatal(err)
 	}
-	for _, k := range []string{"projects", "peers", "health", "launchers", "default_launcher", "directory_probes"} {
+	for _, k := range []string{"projects", "peers", "health", "launchers", "default_launcher", "directory_probes", "peer_directory_probes"} {
 		if _, ok := got[k]; !ok {
 			t.Errorf("missing key %q in %s", k, b)
 		}

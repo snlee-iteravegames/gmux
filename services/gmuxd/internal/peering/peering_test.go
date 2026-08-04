@@ -1,6 +1,7 @@
 package peering
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -222,6 +223,111 @@ func TestPeerStatus_CarriesSource(t *testing.T) {
 		if got[name] != want {
 			t.Errorf("PeerStatus()[%q].Source = %q, want %q", name, got[name], want)
 		}
+	}
+}
+
+func TestFetchProjectsCachesDirectoryProbesAndClearsForLegacyPeer(t *testing.T) {
+	var mu sync.Mutex
+	includeProbes := true
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/projects" {
+			http.NotFound(w, r)
+			return
+		}
+		mu.Lock()
+		withProbes := includeProbes
+		mu.Unlock()
+		data := map[string]any{"configured": []any{}, "discovered": []any{}}
+		if withProbes {
+			data["directory_probes"] = map[string]any{
+				"/home/alice/work/app": map[string]any{
+					"git": map[string]any{"branch": "remote-main", "dirty_count": 2},
+				},
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "data": data})
+	}))
+	defer server.Close()
+
+	peer := newPeer(config.PeerConfig{Name: "tower", URL: server.URL}, store.New(), nil)
+	peer.fetchProjects(context.Background())
+	got, loaded := peer.CachedDirectoryProbes()
+	if !loaded || got["/home/alice/work/app"].Git == nil {
+		t.Fatalf("remote directory probes not cached: loaded=%v probes=%#v", loaded, got)
+	}
+	if branch := got["/home/alice/work/app"].Git.Branch; branch != "remote-main" {
+		t.Fatalf("branch = %q, want remote-main", branch)
+	}
+
+	// A pre-extension peer omits the field. A successful refresh must clear a
+	// previous cache rather than retaining stale metadata.
+	mu.Lock()
+	includeProbes = false
+	mu.Unlock()
+	peer.handleEvent(context.Background(), "directory-probes-update", nil)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		got, loaded = peer.CachedDirectoryProbes()
+		if loaded && len(got) == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("legacy refresh retained probes: loaded=%v probes=%#v", loaded, got)
+}
+
+func TestPeerDirectoryProbesClearedWhenConnectionStops(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/events":
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprint(w, "event: snapshot.sessions\ndata: {\"sessions\":[]}\n\n")
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+		case "/v1/health":
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "data": map[string]any{}})
+		case "/v1/projects":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok": true,
+				"data": map[string]any{
+					"configured": []any{},
+					"directory_probes": map[string]any{
+						"/remote/app": map[string]any{
+							"git": map[string]any{"branch": "old", "dirty_count": 0},
+						},
+					},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	peer := newPeer(config.PeerConfig{Name: "tower", URL: server.URL}, store.New(), nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		peer.run(ctx)
+		close(done)
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if probes, loaded := peer.CachedDirectoryProbes(); loaded && len(probes) == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if probes, loaded := peer.CachedDirectoryProbes(); !loaded || len(probes) != 1 {
+		cancel()
+		<-done
+		t.Fatalf("timed out waiting for probe cache: loaded=%v probes=%#v", loaded, probes)
+	}
+
+	cancel()
+	<-done
+	if probes, _ := peer.CachedDirectoryProbes(); probes != nil {
+		t.Fatalf("disconnect retained stale probes: %#v", probes)
 	}
 }
 
@@ -745,8 +851,8 @@ func TestManager_RemovePeer(t *testing.T) {
 // peers; the projects-side cleanup relies on the wasLocal branch.
 func TestManager_RemovePeer_FiresOnPeerRemoved(t *testing.T) {
 	type call struct {
-		name    string
-		local   bool
+		name  string
+		local bool
 	}
 
 	run := func(t *testing.T, peerLocal bool) {

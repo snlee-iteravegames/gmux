@@ -203,6 +203,32 @@ describe('buildProjectFolders', () => {
     })).toBeUndefined()
   })
 
+  it('joins configured peer probes through the resolved current peer key', () => {
+    const folders = buildProjectFolders(
+      [{ slug: 'app', peer: 'tower-old', node_id: 'node-tower' }],
+      [],
+      undefined,
+      { tower: [{ slug: 'app', launch_cwd: '~/work/app' }] },
+      () => ({ effectivePeer: 'tower', resolved: true }),
+      { '/Users/local/work/app': { git: { branch: 'local', dirty_count: 0 } } },
+      {
+        tower: {
+          '/home/alice/work/app': {
+            git: { branch: 'remote', dirty_count: 1 },
+            pr: { number: 42, status: 'open', url: 'https://example.com/pr/42' },
+          },
+        },
+        laptop: {
+          '/home/bob/work/app': { git: { branch: 'wrong-peer', dirty_count: 0 } },
+        },
+      },
+    )
+
+    expect(folders[0].peer).toBe('tower')
+    expect(folders[0].probe?.git?.branch).toBe('remote')
+    expect(folders[0].probe?.pr?.url).toBe('https://example.com/pr/42')
+  })
+
   it('falls back to a representative local workspace for configured folders', () => {
     const sessions = [makeSession({
       id: 's1', cwd: '~/worktrees/app-feature', workspace_root: '~/worktrees/app-feature',
@@ -322,17 +348,25 @@ describe('buildProjectFolders', () => {
       ])
     })
 
-    it('joins automatic local probes and excludes remote folders', () => {
+    it('joins automatic folders only against their owner probe map', () => {
       const sessions = [
         makeSession({ id: 'local', cwd: '~/work/app' }),
-        makeSession({ id: 'remote', cwd: '/Users/alice/work/app', peer: 'tower' }),
+        makeSession({ id: 'remote', cwd: '~/work/app', peer: 'tower' }),
       ]
       const folders = buildProjectFolders(
         [], sessions, undefined, undefined, undefined,
-        { '/Users/alice/work/app': { git: { branch: 'main', dirty_count: 1 } } },
+        { '/Users/alice/work/app': { git: { branch: 'local', dirty_count: 1 } } },
+        {
+          tower: {
+            '/home/tower/work/app': { git: { branch: 'remote', dirty_count: 2 } },
+          },
+          laptop: {
+            '/home/laptop/work/app': { git: { branch: 'wrong-peer', dirty_count: 3 } },
+          },
+        },
       )
-      expect(folders.find(folder => !folder.peer)?.probe?.git?.branch).toBe('main')
-      expect(folders.find(folder => folder.peer === 'tower')?.probe).toBeUndefined()
+      expect(folders.find(folder => !folder.peer)?.probe?.git?.branch).toBe('local')
+      expect(folders.find(folder => folder.peer === 'tower')?.probe?.git?.branch).toBe('remote')
     })
   })
 

@@ -13,6 +13,7 @@ import (
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/apiclient"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/config"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/probes"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/sseclient"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 )
@@ -37,15 +38,18 @@ type Peer struct {
 
 	mu             sync.RWMutex
 	status         Status
-	lastError      string      // human-readable reason for last disconnect
-	cachedHealth   SpokeHealth // peer's /v1/health data, fetched on connect
-	healthLoaded   bool        // true after first successful health fetch
+	lastError      string         // human-readable reason for last disconnect
+	cachedHealth   SpokeHealth    // peer's /v1/health data, fetched on connect
+	healthLoaded   bool           // true after first successful health fetch
 	cachedProjects []SpokeProject // peer's projects, refreshed on connect and on projects-update
 	projectsLoaded bool
 	// cachedDiscovered is the spoke's self-advertised discovered list
 	// (host-authoritative; see SpokeDiscovered). Refreshed alongside
 	// cachedProjects in fetchProjects.
 	cachedDiscovered []SpokeDiscovered
+	// cachedDirectoryProbes is transport data fetched from this peer. Keys are
+	// canonical paths on the peer and must never be probed on the hub.
+	cachedDirectoryProbes map[string]probes.DirectoryProbe
 
 	// onStatus is called when connection state changes.
 	onStatus func(name string, status Status)
@@ -169,11 +173,29 @@ func (p *Peer) CachedDiscovered() ([]SpokeDiscovered, bool) {
 	return p.cachedDiscovered, p.projectsLoaded
 }
 
+// CachedDirectoryProbes returns the metadata fetched from this peer's
+// GET /v1/projects response. The bool follows projectsLoaded because projects,
+// discovered rows, and probes are replaced atomically from the same response.
+func (p *Peer) CachedDirectoryProbes() (map[string]probes.DirectoryProbe, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.cachedDirectoryProbes, p.projectsLoaded
+}
+
+// clearDirectoryProbes removes ephemeral remote metadata on disconnect. Project
+// and discovery caches intentionally survive reconnects, but probe results can
+// become stale and must not be exposed until the peer refreshes them.
+func (p *Peer) clearDirectoryProbes() {
+	p.mu.Lock()
+	p.cachedDirectoryProbes = nil
+	p.mu.Unlock()
+}
+
 // fetchProjects fetches the spoke's project list via GET /v1/projects,
 // projects each Item down to a SpokeProject (slug + launch_cwd hint
 // derived from the first path rule), and caches the result. Called
 // once after each successful SSE connection and again whenever the
-// peer broadcasts projects-update.
+// peer broadcasts projects-update or directory-probes-update.
 func (p *Peer) fetchProjects(ctx context.Context) {
 	data, err := p.api.GetProjects(ctx)
 	if err != nil {
@@ -188,7 +210,8 @@ func (p *Peer) fetchProjects(ctx context.Context) {
 				Path string `json:"path,omitempty"`
 			} `json:"match"`
 		} `json:"configured"`
-		Discovered []SpokeDiscovered `json:"discovered"`
+		Discovered      []SpokeDiscovered                `json:"discovered"`
+		DirectoryProbes map[string]probes.DirectoryProbe `json:"directory_probes"`
 	}
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		log.Printf("peering: %s: parse projects: %v", p.Config.Name, err)
@@ -222,9 +245,22 @@ func (p *Peer) fetchProjects(ctx context.Context) {
 	if discovered == nil {
 		discovered = []SpokeDiscovered{}
 	}
+	// Missing on older peers. Replace a previous value with an empty map rather
+	// than retaining stale results if a peer is downgraded or changes identity.
+	directoryProbes := envelope.DirectoryProbes
+	if directoryProbes == nil {
+		directoryProbes = map[string]probes.DirectoryProbe{}
+	}
+	// A response that completed after disconnect belongs to the old connection
+	// generation. Never publish it into the cache used by a later reconnect.
 	p.mu.Lock()
+	if ctx.Err() != nil {
+		p.mu.Unlock()
+		return
+	}
 	p.cachedProjects = projects
 	p.cachedDiscovered = discovered
+	p.cachedDirectoryProbes = directoryProbes
 	p.projectsLoaded = true
 	p.mu.Unlock()
 	// Signal a status change so the hub's world coalescer re-emits
@@ -242,7 +278,7 @@ func (p *Peer) fetchProjects(ctx context.Context) {
 		return
 	}
 	if p.onStatus != nil {
-		p.onStatus(p.Config.Name, p.status)
+		p.onStatus(p.Config.Name, p.Status())
 	}
 }
 
@@ -294,7 +330,12 @@ func (p *Peer) run(ctx context.Context) {
 
 		p.setStatus(StatusConnecting)
 		wasConnected := false
-		err := p.subscribe(ctx, func() { wasConnected = true })
+		// Scope project/probe refreshes to this SSE connection generation. The
+		// manager's parent context survives transient reconnects, so passing it
+		// directly would let an in-flight old response repopulate a cleared cache.
+		connectionCtx, cancelConnection := context.WithCancel(ctx)
+		err := p.subscribe(connectionCtx, func() { wasConnected = true })
+		cancelConnection()
 
 		// Sessions stay in the store across reconnects. The spoke's
 		// initial dump on the next successful connect will upsert
@@ -311,7 +352,9 @@ func (p *Peer) run(ctx context.Context) {
 		// Keep cachedHealth across reconnects: the spoke's version
 		// and launchers don't change because our connection dropped,
 		// and clearing it would make the UI show empty data during
-		// the brief reconnect window.
+		// the brief reconnect window. Directory probes are ephemeral,
+		// however, so clear them before broadcasting the disconnect.
+		p.clearDirectoryProbes()
 		p.setStatus(StatusDisconnected)
 
 		if ctx.Err() != nil {
@@ -432,14 +475,10 @@ func (p *Peer) handleEvent(ctx context.Context, eventType string, data []byte) {
 			ID:   namespacedID,
 		})
 
-	case "projects-update":
-		// Spoke's projects.json changed. Refresh the cached
-		// projection so the hub's snapshot.world reflects the new
-		// state. Pass the streaming ctx so the fetch is cancelled
-		// if the peer disconnects mid-flight (otherwise a slow
-		// /v1/projects could race past disconnect and fire a
-		// spurious peer-status broadcast via onStatus, triggering
-		// a world re-compose on stale data).
+	case "projects-update", "directory-probes-update":
+		// Project config and directory probes share GET /v1/projects and one
+		// atomic cache replacement. Refresh for either trigger. Pass the
+		// streaming ctx so a slow request cannot publish after disconnect.
 		go p.fetchProjects(ctx)
 
 	case "snapshot.world":

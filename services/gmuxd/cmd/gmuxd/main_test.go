@@ -592,6 +592,83 @@ func TestComposePeerProjectsSkipsLocalPeers(t *testing.T) {
 	}
 }
 
+func TestComposePeerDirectoryProbesSeparatesCurrentPeerKeysAndSkipsLocal(t *testing.T) {
+	newSpoke := func(branch string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/v1/events":
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = w.Write([]byte("event: snapshot.sessions\ndata: {\"sessions\":[]}\n\n"))
+				w.(http.Flusher).Flush()
+				<-r.Context().Done()
+			case "/v1/health":
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"ok": true, "data": map[string]any{"version": "test"},
+				})
+			case "/v1/projects":
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"ok": true,
+					"data": map[string]any{
+						"configured": []any{},
+						"directory_probes": map[string]any{
+							"/same/path": map[string]any{
+								"git": map[string]any{"branch": branch, "dirty_count": 0},
+							},
+						},
+					},
+				})
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+	}
+	tower := newSpoke("tower")
+	defer tower.Close()
+	laptop := newSpoke("laptop")
+	defer laptop.Close()
+	devcontainer := newSpoke("container")
+	defer devcontainer.Close()
+
+	mgr := peering.NewManager([]config.PeerConfig{
+		{Name: "tower-renamed", URL: tower.URL},
+		{Name: "laptop", URL: laptop.URL},
+		{Name: "devcontainer", URL: devcontainer.URL, Local: true},
+	}, store.New(), "test-host")
+	mgr.Start()
+	defer mgr.Stop()
+
+	for _, name := range []string{"tower-renamed", "laptop", "devcontainer"} {
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			if p := mgr.GetPeer(name); p != nil {
+				if _, loaded := p.CachedDirectoryProbes(); loaded {
+					break
+				}
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if p := mgr.GetPeer(name); p == nil {
+			t.Fatalf("peer %q disappeared", name)
+		} else if _, loaded := p.CachedDirectoryProbes(); !loaded {
+			t.Fatalf("timed out waiting for %q probes", name)
+		}
+	}
+
+	got := composePeerDirectoryProbes(mgr)
+	if _, exists := got["devcontainer"]; exists {
+		t.Fatalf("local peer probes leaked into peer map: %#v", got)
+	}
+	if _, exists := got["tower"]; exists {
+		t.Fatalf("stale pre-rename key present: %#v", got)
+	}
+	if branch := got["tower-renamed"]["/same/path"].Git.Branch; branch != "tower" {
+		t.Fatalf("tower-renamed branch = %q, want tower", branch)
+	}
+	if branch := got["laptop"]["/same/path"].Git.Branch; branch != "laptop" {
+		t.Fatalf("laptop branch = %q, want laptop", branch)
+	}
+}
+
 func TestShouldForwardActivity(t *testing.T) {
 	// Local peer "dc" is a devcontainer; "hub-b" is a network peer.
 	isLocalPeer := func(name string) bool { return name == "dc" }

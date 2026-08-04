@@ -1903,14 +1903,15 @@ func serve(stderr io.Writer) int {
 			}
 			health := composeHealth()
 			return snapshot.WorldPayload{
-				Projects:        items,
-				Peers:           currentPeers(peerManager),
-				Health:          health,
-				Launchers:       launchConfig.Launchers,
-				DefaultLauncher: launchConfig.DefaultLauncher,
-				PeerProjects:    composePeerProjects(peerManager),
-				PeerDiscovered:  composePeerDiscovered(peerManager),
-				DirectoryProbes: directoryProbesForState(state),
+				Projects:            items,
+				Peers:               currentPeers(peerManager),
+				Health:              health,
+				Launchers:           launchConfig.Launchers,
+				DefaultLauncher:     launchConfig.DefaultLauncher,
+				PeerProjects:        composePeerProjects(peerManager),
+				PeerDiscovered:      composePeerDiscovered(peerManager),
+				DirectoryProbes:     directoryProbesForState(state),
+				PeerDirectoryProbes: composePeerDirectoryProbes(peerManager),
 			}
 		}
 
@@ -1979,15 +1980,11 @@ func serve(stderr io.Writer) int {
 					}
 					sendSSE(w, "session-activity", ev)
 					flusher.Flush()
-				case "projects-update":
-					// Peer-hub trigger only. A `?as=peer` subscriber has
-					// no snapshot.world, so it relies on this event to
-					// re-fetch our project list (GET /v1/projects) and
-					// refresh the peer_projects it surfaces upstream.
-					// Browser subscribers ignore it — they already get
-					// projects via snapshot.world (projects-update fires
-					// the world coalescer, see snapshotPumpRoute) — so we
-					// don't waste the frame on them.
+				case "projects-update", "directory-probes-update":
+					// Peer-hub triggers only. A `?as=peer` subscriber has no
+					// snapshot.world, so either change asks it to re-fetch our
+					// shared GET /v1/projects projection. Browsers already get
+					// both through snapshot.world and don't need this frame.
 					if !asPeer {
 						continue
 					}
@@ -2336,6 +2333,36 @@ func composePeerDiscovered(mgr *peering.Manager) map[string][]peering.SpokeDisco
 			discovered = []peering.SpokeDiscovered{}
 		}
 		out[info.Name] = discovered
+	}
+	return out
+}
+
+// composePeerDirectoryProbes keeps remote filesystem metadata isolated by the
+// same current peer name used by peer_projects and reference resolution. Local
+// peers (devcontainers) are excluded: their project ownership belongs to the
+// parent, and the parent must never probe or treat container paths as local.
+func composePeerDirectoryProbes(mgr *peering.Manager) map[string]map[string]probes.DirectoryProbe {
+	if mgr == nil {
+		return nil
+	}
+	infos := mgr.PeerStatus()
+	if len(infos) == 0 {
+		return nil
+	}
+	out := make(map[string]map[string]probes.DirectoryProbe, len(infos))
+	for _, info := range infos {
+		if info.Local {
+			continue
+		}
+		p := mgr.GetPeer(info.Name)
+		if p == nil {
+			continue
+		}
+		remote, _ := p.CachedDirectoryProbes()
+		if remote == nil {
+			remote = map[string]probes.DirectoryProbe{}
+		}
+		out[info.Name] = remote
 	}
 	return out
 }

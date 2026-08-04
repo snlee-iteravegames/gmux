@@ -4,7 +4,7 @@
 // Builds sidebar folders and project hub topology. Pure functions with
 // no side effects or signal dependencies.
 
-import type { DirectoryProbe, DirectoryProbes } from '@gmux/protocol'
+import type { DirectoryProbe, DirectoryProbes, PeerDirectoryProbes } from '@gmux/protocol'
 import type {
   Session, Folder, FolderAggregate, FolderUrgency,
   ProjectItem, PeerInfo, DiscoveredProject,
@@ -406,7 +406,7 @@ export function directoryProbeForPath(
   return suffixMatches.length === 1 ? suffixMatches[0][1] : undefined
 }
 
-function probeForLocalFolder(
+function probeForFolder(
   candidates: Array<string | undefined>,
   directoryProbes: Readonly<DirectoryProbes> | undefined,
 ): DirectoryProbe | undefined {
@@ -455,6 +455,7 @@ export function buildProjectFolders(
   // references resolve to their stored name (legacy behavior). (refs #270)
   resolveRef?: (peer: string, slug: string) => { effectivePeer: string; resolved: boolean } | undefined,
   directoryProbes?: Readonly<DirectoryProbes>,
+  peerDirectoryProbes?: Readonly<PeerDirectoryProbes>,
 ): Folder[] {
   // Bucket every stamped session by `${ownerPeer}::${slug}`.
   // ownerPeer is '' for sessions owned by the viewer (local sessions,
@@ -523,9 +524,12 @@ export function buildProjectFolders(
         }
       }
     }
-    const localWorkspaceCandidates = visible
-      .filter(session => !session.peer)
+    const workspaceCandidates = visible
+      .filter(session => ownerPeer !== '' || !session.peer)
       .map(session => session.workspace_root || session.cwd)
+    const folderProbes = ownerPeer === ''
+      ? directoryProbes
+      : unresolved ? undefined : peerDirectoryProbes?.[ownerPeer]
     folders.push({
       key: `${ownerPeer}::${project.slug}`,
       slug: project.slug,
@@ -534,9 +538,7 @@ export function buildProjectFolders(
       launchCwd,
       missing: missing || undefined,
       unresolved: unresolved || undefined,
-      probe: ownerPeer === ''
-        ? probeForLocalFolder([launchCwd, ...localWorkspaceCandidates], directoryProbes)
-        : undefined,
+      probe: probeForFolder([launchCwd, ...workspaceCandidates], folderProbes),
       aggregate: buildFolderAggregate(visible),
       sessions: visible,
     })
@@ -578,9 +580,10 @@ export function buildProjectFolders(
       peer: group.host || undefined,
       launchCwd: group.directory,
       automatic: true,
-      probe: group.host === ''
-        ? directoryProbeForPath(group.directory, directoryProbes)
-        : undefined,
+      probe: directoryProbeForPath(
+        group.directory,
+        group.host === '' ? directoryProbes : peerDirectoryProbes?.[group.host],
+      ),
       aggregate: buildFolderAggregate(group.sessions),
       sessions: group.sessions,
     })

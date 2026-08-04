@@ -3,6 +3,7 @@
  * Active with ?mock query param or VITE_MOCK=1.
  */
 
+import type { DirectoryProbes } from '@gmux/protocol'
 import type { ProjectItem, PeerInfo } from '../types'
 import type { HealthData } from '../store'
 import type { MockSession } from './types'
@@ -44,6 +45,31 @@ export const MOCK_HEALTH: HealthData = {
   version: '1.2.0',
   hostname: 'workstation',
   peers: MOCK_PEERS,
+}
+
+/** Folder metadata used by product screenshots and mock-mode development. */
+export const MOCK_DIRECTORY_PROBES: DirectoryProbes = {
+  '/home/user/dev/my-project': {
+    git: { branch: 'feature/probes', dirty_count: 3 },
+    pr: { number: 42, status: 'open', url: 'https://github.com/acme/my-project/pull/42' },
+    scripts: [{ id: 'ci', label: 'CI', value: 'passing', status: 'success' }],
+  },
+}
+
+export const MOCK_PEER_DIRECTORY_PROBES: Record<string, DirectoryProbes> = {
+  laptop: {
+    '/home/user/dev/my-project': {
+      git: { branch: 'feature/probes', dirty_count: 3 },
+      pr: { number: 42, status: 'open', url: 'https://github.com/acme/my-project/pull/42' },
+      scripts: [{ id: 'ci', label: 'CI', value: 'passing', status: 'success' }],
+    },
+  },
+  server: {
+    '/home/user/dev/openclaw': {
+      git: { branch: 'main', dirty_count: 0 },
+      scripts: [{ id: 'deploy', label: 'Deploy', value: 'healthy', status: 'success' }],
+    },
+  },
 }
 
 /** Session ID → mock session (for terminal content + cursor lookup). */

@@ -85,9 +85,16 @@ type WorldPayload struct {
 	PeerDiscovered any `json:"peer_discovered,omitempty"`
 
 	// DirectoryProbes is keyed by canonical local workspace path. It is
-	// optional because probe collection is asynchronous and is not forwarded
-	// through peers; browsers omit decorations when no local result exists.
+	// optional because probe collection is asynchronous; browsers omit
+	// decorations when no local result exists.
 	DirectoryProbes any `json:"directory_probes,omitempty"`
+
+	// PeerDirectoryProbes carries transport-only metadata fetched from each
+	// network peer's GET /v1/projects response. The outer key is the canonical
+	// peer name used by peer_projects and reference resolution; inner keys are
+	// canonical paths on that peer. Local peers are omitted because their
+	// project ownership remains with the parent host.
+	PeerDirectoryProbes any `json:"peer_directory_probes,omitempty"`
 }
 
 // ComposeSessions builds a snapshot.sessions payload from the live

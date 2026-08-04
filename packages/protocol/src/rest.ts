@@ -65,14 +65,17 @@ export const DirectoryProbeSchema = z.object({
 })
 
 export const DirectoryProbesSchema = z.record(DirectoryProbeSchema)
+export const PeerDirectoryProbesSchema = z.record(DirectoryProbesSchema)
 
 /**
- * The directory-probe extension shared by GET /v1/projects `data` and
- * `snapshot.world`. Passthrough keeps the schema forward-compatible with the
- * rest of each payload; older servers and peers may omit the field entirely.
+ * The directory-probe extensions shared by GET /v1/projects `data` and
+ * `snapshot.world`. The local map is present in either payload; the peer-keyed
+ * map is composed only by a hub snapshot. Passthrough and optional fields keep
+ * older servers and peers fully compatible.
  */
 export const DirectoryProbePayloadSchema = z.object({
   directory_probes: DirectoryProbesSchema.optional(),
+  peer_directory_probes: PeerDirectoryProbesSchema.optional(),
 }).passthrough()
 
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>
@@ -83,3 +86,4 @@ export type PullRequestProbe = z.infer<typeof PullRequestProbeSchema>
 export type ScriptProbe = z.infer<typeof ScriptProbeSchema>
 export type DirectoryProbe = z.infer<typeof DirectoryProbeSchema>
 export type DirectoryProbes = z.infer<typeof DirectoryProbesSchema>
+export type PeerDirectoryProbes = z.infer<typeof PeerDirectoryProbesSchema>
