@@ -108,8 +108,8 @@ graph TD
     subgraph "Folder: ~/dev/myapp"
         git["git probe\nmain · 3 files changed"]
         pr["github-pr probe\nPR #42 open"]
-        s1["Session: pi\n● thinking"]
-        s2["Session: pytest --watch\n● 47/47 passing"]
+        s1["Session: pi\n● waiting for input"]
+        s2["Session: codex\n● thinking"]
     end
 
     git --> heading["Folder heading\nmyapp — main · 3 changed · PR #42"]
