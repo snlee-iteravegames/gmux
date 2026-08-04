@@ -65,8 +65,8 @@ graph LR
 │   ● fix auth bug               now  │
 │     thinking · pi                   │
 │                                     │
-│   ● test watcher             2m ago │
-│     47/47 passing · pytest          │
+│   ● refactor adapters         2m ago │
+│     thinking · codex                 │
 │                                     │
 │ ▼ gmux                         ● 1  │
 │   feature/probes · clean            │
@@ -90,7 +90,7 @@ Sessions are grouped into **folders** by working directory. Each folder heading 
 - **Bounded persisted scrollback** — up to roughly 2 MiB per runner replays on reconnect and remains available after runner exit
 - **Flicker-free switching** — DEC 2026 synchronized output renders session swaps in a single frame
 - **Session lifecycle** — live status, exit codes, kill from the UI
-- **Reconnecting** — tab away, come back, the terminal is right where you left it
+- **Reconnecting** — tab away and return to the live terminal with bounded history replayed when a reconnect is needed
 
 ### Adapters — session-level intelligence
 Adapters teach gmux how to work with specific tools. They're compiled into the binary and selected automatically by command name.
@@ -101,7 +101,7 @@ Adapters teach gmux how to work with specific tools. They're compiled into the b
 - **Graceful fallback** — unknown commands get the shell adapter
 
 ### Probes — directory-level intelligence
-Probes observe the working directory and enrich folder headings with project context.
+Probes run on the gmuxd that owns each working directory and enrich local or remote folder headings with project context.
 
 ```mermaid
 graph TD

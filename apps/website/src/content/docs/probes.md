@@ -12,7 +12,7 @@ For each local configured project path or active local session workspace, gmux r
 - current Git branch and dirty file count;
 - the current GitHub pull request number, state, and URL when an authenticated `gh` CLI is available.
 
-Probe failures are isolated: a missing Git repository, unavailable `gh`, authentication failure, or timeout simply omits that result. A hub never runs local probes against paths reported by a remote peer.
+Probe failures are isolated: a missing Git repository, unavailable `gh`, authentication failure, or timeout simply omits that result. Each connected peer runs probes against its own filesystem and publishes the results to the hub; the hub never executes remote paths locally. Older peers that do not publish probes remain compatible and simply show no metadata.
 
 ## Script probes
 

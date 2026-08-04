@@ -9,6 +9,7 @@
  * Output:
  *   apps/website/src/assets/hero-desktop.png
  *   apps/website/src/assets/hero-mobile.png
+ *   apps/website/public/og.png
  */
 
 const { chromium } = require('playwright')
@@ -77,6 +78,12 @@ async function applyNoWrap(page) {
 async function preparePage(page, url) {
   await page.goto(url, { timeout: 5000, waitUntil: 'load' })
   await page.waitForSelector('.session-item', { timeout: 5000 })
+  // The current home route no longer auto-selects a session. Open the first
+  // row so marketing captures exercise the terminal/header/mobile controls.
+  if (!await page.$('.terminal-shell')) {
+    const href = await page.locator('.session-item').first().getAttribute('href')
+    if (href) await page.goto(new URL(href, BASE).href, { timeout: 5000, waitUntil: 'load' })
+  }
   // Wait for mock terminal canvas to render content
   await page.waitForSelector('.xterm-screen canvas', { timeout: 5000 }).catch(() => {})
   await page.waitForTimeout(800)
@@ -101,15 +108,32 @@ async function takeDesktop(browser) {
   console.log(`  → ${path.relative(ROOT, outPath)} (${(stat.size / 1024).toFixed(0)}KB)`)
 }
 
+async function takeOG(browser) {
+  console.log('Taking OpenGraph screenshot...')
+  const page = await browser.newPage({
+    viewport: { width: 1200, height: 630 },
+    deviceScaleFactor: 1,
+  })
+
+  await preparePage(page, DESKTOP_URL)
+  await applyNoWrap(page)
+
+  const outPath = path.join(ROOT, 'apps/website/public/og.png')
+  await page.screenshot({ path: outPath })
+  await page.close()
+
+  const stat = fs.statSync(outPath)
+  console.log(`  → ${path.relative(ROOT, outPath)} (${(stat.size / 1024).toFixed(0)}KB)`)
+}
+
 async function takeMobile(browser) {
   console.log('Taking mobile screenshot...')
-  // hasTouch triggers the pointer:coarse media query (sidebar overlay + mobile bar).
-  // isMobile is intentionally false: it causes xterm's canvas renderer to stretch
-  // cells when combined with the width: 2000px override.
+  // hasTouch + isMobile trigger the pointer:coarse layout in both bundled
+  // Playwright Chromium and a system Chrome fallback.
   const page = await browser.newPage({
     viewport: { width: 310, height: 560 },
     deviceScaleFactor: 2,
-    isMobile: false,
+    isMobile: true,
     hasTouch: true,
   })
 
@@ -157,7 +181,11 @@ async function takeMobile(browser) {
     // xterm's fit.fit() reflow behaves differently on the first page load in a
     // browser vs. subsequent loads (browser-level state, not isolated by
     // contexts). Use a fresh browser per shot to guarantee first-load behavior.
-    const launchArgs = { args: ['--disable-blink-features=TextAutosizing'] }
+    const systemChrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+    const launchArgs = {
+      args: ['--disable-blink-features=TextAutosizing'],
+      ...(fs.existsSync(systemChrome) ? { executablePath: systemChrome } : {}),
+    }
 
     const d = await chromium.launch(launchArgs)
     await takeDesktop(d)
@@ -167,7 +195,11 @@ async function takeMobile(browser) {
     await takeMobile(m)
     await m.close()
 
-    console.log('\n✓ Hero screenshots generated.')
+    const og = await chromium.launch(launchArgs)
+    await takeOG(og)
+    await og.close()
+
+    console.log('\n✓ Hero and OpenGraph screenshots generated.')
   } finally {
     if (server) server.kill('SIGTERM')
   }
