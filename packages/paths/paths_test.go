@@ -111,6 +111,8 @@ func TestIsValidSessionID(t *testing.T) {
 		"sess-claude",
 		"sess-resume_1",
 		"sess-codex-2",
+		"019fb223-9031-7e66-97d3-a662799c83fc", // legacy UUID
+		"788FEA03-D21A-47F5-987F-1694FF781793", // legacy uppercase UUID
 	}
 	for _, id := range valid {
 		if !IsValidSessionID(id) {
@@ -120,16 +122,18 @@ func TestIsValidSessionID(t *testing.T) {
 
 	invalid := []string{
 		"",
-		"abcd1234",       // missing prefix
-		"sess-",          // empty suffix
-		"sess-../escape", // path traversal
-		"sess-..",        // parent dir
-		"../sess-abcd",   // leading traversal
-		"sess-a/b",       // separator
-		`sess-a\b`,       // backslash separator
-		"sess-a::b",      // folder-key separator
-		"sess-a b",       // space
-		"sess-a\n",       // newline
+		"abcd1234",                             // missing prefix
+		"019fb223-9031-7e66-97d3-a662799c83fg", // non-hex UUID
+		"019fb223-9031-7e66-97d3",              // truncated UUID
+		"sess-",                                // empty suffix
+		"sess-../escape",                       // path traversal
+		"sess-..",                              // parent dir
+		"../sess-abcd",                         // leading traversal
+		"sess-a/b",                             // separator
+		`sess-a\b`,                             // backslash separator
+		"sess-a::b",                            // folder-key separator
+		"sess-a b",                             // space
+		"sess-a\n",                             // newline
 	}
 	for _, id := range invalid {
 		if IsValidSessionID(id) {

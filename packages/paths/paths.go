@@ -10,17 +10,11 @@ import (
 	"strings"
 )
 
-// sessionIDRe matches well-formed session IDs. IDs are minted by
-// cli/gmux/internal/naming.SessionID as "sess-<hex>"; the allowlist
-// here (sess- prefix followed by alphanumerics, hyphens, and
-// underscores) is deliberately a touch broader than pure hex so it
-// stays robust to ID-shape evolution, while still excluding every
-// path-dangerous character. Validating against this shape keeps an
-// attacker-influenced ID (the daemon derives it from a runner's
-// /meta, and a malicious socket_path in POST /v1/register could try
-// to steer it) from carrying path separators or ".." into
-// filepath.Join.
-var sessionIDRe = regexp.MustCompile(`^sess-[A-Za-z0-9_-]+$`)
+// sessionIDRe matches current session IDs minted as "sess-<hex>" plus the
+// UUID-shaped IDs used by older gmux releases. Both alternatives exclude path
+// separators and "..", keeping an attacker-influenced ID from escaping its
+// socket/state directory while allowing persisted legacy sessions to resume.
+var sessionIDRe = regexp.MustCompile(`^(?:sess-[A-Za-z0-9_-]+|[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12})$`)
 
 // IsValidSessionID reports whether id is a well-formed local session
 // ID safe to use as a path segment under SessionsDir.
