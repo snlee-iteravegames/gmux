@@ -58,31 +58,28 @@ const FREEZE_CSS = `
   }
 `
 
-// Widen the terminal so long lines don't visibly wrap. xterm's canvas renderer
-// paints cells at fixed font-metric pixel size, so making the canvas wider just
-// extends the text past the viewport edge (which is clipped). We also dispatch
-// a resize event so MockTerminal's onResize -> fit.fit() recomputes cols at the
-// new width, giving the terminal room for ~260 cols with no wrapping.
-const NO_WRAP_CSS = `
-  .terminal-shell, .terminal-container, .terminal, .xterm-scrollable-element, .xterm-screen {
-    width: 2000px !important;
-  }
-`
-
-async function applyNoWrap(page) {
-  await page.addStyleTag({ content: NO_WRAP_CSS })
-  await page.evaluate(() => window.dispatchEvent(new Event('resize')))
-  await page.waitForTimeout(400)
-}
-
 async function preparePage(page, url) {
+  // Headless system Chrome does not reliably composite xterm's WebGL canvas
+  // into screenshots. Disable only WebGL contexts for capture pages so xterm
+  // falls back to its screenshot-safe 2D renderer.
+  await page.addInitScript(() => {
+    const getContext = HTMLCanvasElement.prototype.getContext
+    HTMLCanvasElement.prototype.getContext = function (type, ...args) {
+      if (type === 'webgl' || type === 'webgl2' || type === 'experimental-webgl') return null
+      return getContext.call(this, type, ...args)
+    }
+  })
   await page.goto(url, { timeout: 5000, waitUntil: 'load' })
   await page.waitForSelector('.session-item', { timeout: 5000 })
   // The current home route no longer auto-selects a session. Open the first
   // row so marketing captures exercise the terminal/header/mobile controls.
-  if (!await page.$('.terminal-shell')) {
+  if (!await page.$('.xterm-screen')) {
     const href = await page.locator('.session-item').first().getAttribute('href')
-    if (href) await page.goto(new URL(href, BASE).href, { timeout: 5000, waitUntil: 'load' })
+    if (href) {
+      const target = new URL(href, BASE)
+      target.search = new URL(url).search
+      await page.goto(target.href, { timeout: 5000, waitUntil: 'load' })
+    }
   }
   // Wait for mock terminal canvas to render content
   await page.waitForSelector('.xterm-screen canvas', { timeout: 5000 }).catch(() => {})
@@ -98,7 +95,6 @@ async function takeDesktop(browser) {
   })
 
   await preparePage(page, DESKTOP_URL)
-  await applyNoWrap(page)
 
   const outPath = path.join(ROOT, 'apps/website/src/assets/hero-desktop.png')
   await page.screenshot({ path: outPath })
@@ -116,7 +112,6 @@ async function takeOG(browser) {
   })
 
   await preparePage(page, DESKTOP_URL)
-  await applyNoWrap(page)
 
   const outPath = path.join(ROOT, 'apps/website/public/og.png')
   await page.screenshot({ path: outPath })
@@ -138,7 +133,6 @@ async function takeMobile(browser) {
   })
 
   await preparePage(page, MOBILE_URL)
-  await applyNoWrap(page)
   await page.waitForSelector('.mobile-bottom-bar', { timeout: 5000 })
 
   // Open the sidebar
@@ -148,9 +142,8 @@ async function takeMobile(browser) {
     await page.waitForTimeout(300)
   }
 
-  // Re-freeze + re-apply width override after sidebar layout settles
+  // Re-freeze after sidebar layout settles.
   await page.addStyleTag({ content: FREEZE_CSS })
-  await page.addStyleTag({ content: NO_WRAP_CSS })
   await page.waitForTimeout(200)
 
   const outPath = path.join(ROOT, 'apps/website/src/assets/hero-mobile.png')
