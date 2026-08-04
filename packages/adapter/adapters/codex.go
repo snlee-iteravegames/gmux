@@ -266,13 +266,13 @@ func (c *Codex) ParseNewLines(lines []string, _ string) []adapter.Event {
 				// User submitted a prompt — assistant will start working.
 				// Title comes from ParseSessionFile on attribution, not here.
 				events = append(events, adapter.Event{
-					Status: &adapter.Status{Working: true},
+					Status: &adapter.Status{Working: true, Label: "Thinking"},
 				})
 
 			case "task_complete":
-				// Agent finished work — clear status, mark unread.
+				// Agent finished work — wait for input, mark unread.
 				events = append(events, adapter.Event{
-					Status: &adapter.Status{},
+					Status: &adapter.Status{Label: "Waiting for input"},
 					Unread: adapter.BoolPtr(true),
 				})
 

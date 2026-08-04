@@ -332,6 +332,9 @@ func TestClaudeParseNewLinesUserMessage(t *testing.T) {
 	if events[0].Status == nil || !events[0].Status.Working {
 		t.Error("expected working=true status")
 	}
+	if events[0].Status.Label != "Thinking" {
+		t.Errorf("expected label Thinking, got %q", events[0].Status.Label)
+	}
 }
 
 func TestClaudeParseNewLinesAssistantTextOnly(t *testing.T) {
@@ -344,6 +347,9 @@ func TestClaudeParseNewLinesAssistantTextOnly(t *testing.T) {
 	}
 	if events[0].Status == nil || events[0].Status.Working {
 		t.Error("expected working=false status on text-only assistant")
+	}
+	if events[0].Status.Label != "Waiting for input" {
+		t.Errorf("expected label Waiting for input, got %q", events[0].Status.Label)
 	}
 	if events[0].Unread == nil || !*events[0].Unread {
 		t.Error("expected unread=true on text-only assistant (turn complete)")
@@ -360,6 +366,9 @@ func TestClaudeParseNewLinesAssistantToolUse(t *testing.T) {
 	}
 	if events[0].Status == nil || !events[0].Status.Working {
 		t.Error("expected working=true for tool_use (agent loop continues)")
+	}
+	if events[0].Status.Label != "Thinking" {
+		t.Errorf("expected label Thinking, got %q", events[0].Status.Label)
 	}
 	if events[0].Unread != nil {
 		t.Error("expected unread=nil for tool_use (still working)")
@@ -425,6 +434,9 @@ func TestClaudeParseNewLinesFullTurnCycle(t *testing.T) {
 	}
 	if events[3].Status == nil || events[3].Status.Working {
 		t.Error("last event should be working=false (end_turn)")
+	}
+	if events[3].Status.Label != "Waiting for input" {
+		t.Errorf("last event label = %q, want Waiting for input", events[3].Status.Label)
 	}
 }
 

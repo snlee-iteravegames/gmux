@@ -229,6 +229,9 @@ func TestCodexParseNewLinesUserMessage(t *testing.T) {
 	if events[0].Status == nil || !events[0].Status.Working {
 		t.Error("expected working=true status")
 	}
+	if events[0].Status.Label != "Thinking" {
+		t.Errorf("expected label Thinking, got %q", events[0].Status.Label)
+	}
 }
 
 func TestCodexParseNewLinesTaskComplete(t *testing.T) {
@@ -240,6 +243,9 @@ func TestCodexParseNewLinesTaskComplete(t *testing.T) {
 	}
 	if events[0].Status == nil || events[0].Status.Working {
 		t.Error("expected working=false")
+	}
+	if events[0].Status.Label != "Waiting for input" {
+		t.Errorf("expected label Waiting for input, got %q", events[0].Status.Label)
 	}
 	if events[0].Unread == nil || !*events[0].Unread {
 		t.Error("expected unread=true on task_complete")
@@ -306,6 +312,9 @@ func TestCodexParseNewLinesMultiTurn(t *testing.T) {
 	}
 	if events[1].Status.Working {
 		t.Error("second should be working=false")
+	}
+	if events[0].Status.Label != "Thinking" || events[1].Status.Label != "Waiting for input" {
+		t.Errorf("labels = %q → %q, want Thinking → Waiting for input", events[0].Status.Label, events[1].Status.Label)
 	}
 }
 

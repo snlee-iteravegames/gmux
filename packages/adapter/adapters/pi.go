@@ -332,7 +332,7 @@ func (p *Pi) ParseNewLines(lines []string, filePath string) []adapter.Event {
 			case "user":
 				// User submitted a message — assistant will start working.
 				events = append(events, adapter.Event{
-					Status: &adapter.Status{Working: true},
+					Status: &adapter.Status{Working: true, Label: "Thinking"},
 				})
 
 			case "assistant":
@@ -340,12 +340,12 @@ func (p *Pi) ParseNewLines(lines []string, filePath string) []adapter.Event {
 				case "toolUse":
 					// Assistant wants to call tools — agent loop continues.
 					events = append(events, adapter.Event{
-						Status: &adapter.Status{Working: true},
+						Status: &adapter.Status{Working: true, Label: "Thinking"},
 					})
 				case "stop":
-					// Assistant finished its turn — clear status, mark unread.
+					// Assistant finished its turn — wait for input, mark unread.
 					events = append(events, adapter.Event{
-						Status: &adapter.Status{},
+						Status: &adapter.Status{Label: "Waiting for input"},
 						Unread: adapter.BoolPtr(true),
 					})
 				case "aborted":
@@ -364,7 +364,7 @@ func (p *Pi) ParseNewLines(lines []string, filePath string) []adapter.Event {
 						if count >= piMaxRetries(cwd) {
 							// Retries exhausted — agent gave up.
 							events = append(events, adapter.Event{
-								Status: &adapter.Status{Error: true},
+								Status: &adapter.Status{Error: true, Label: "Error"},
 							})
 						}
 					}

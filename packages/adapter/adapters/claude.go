@@ -15,11 +15,11 @@ import (
 
 // Compile-time interface checks.
 var (
-	_ adapter.Launchable      = (*Claude)(nil)
-	_ adapter.SessionFiler    = (*Claude)(nil)
-	_ adapter.FileMonitor     = (*Claude)(nil)
-	_ adapter.FileAttributor  = (*Claude)(nil)
-	_ adapter.Resumer         = (*Claude)(nil)
+	_ adapter.Launchable     = (*Claude)(nil)
+	_ adapter.SessionFiler   = (*Claude)(nil)
+	_ adapter.FileMonitor    = (*Claude)(nil)
+	_ adapter.FileAttributor = (*Claude)(nil)
+	_ adapter.Resumer        = (*Claude)(nil)
 )
 
 func init() {
@@ -229,11 +229,11 @@ func (c *Claude) ParseSessionFile(path string) (*adapter.SessionFileInfo, error)
 //   - custom-title → title update
 //   - type:"user" → working (assistant will respond)
 //   - type:"assistant" → status from stop_reason + content analysis:
-//       stop_reason=null + tool_use  → working (tool loop continues)
-//       stop_reason=null + text only → idle (final response, no stop_reason on streaming)
-//       stop_reason="end_turn"       → idle (normal completion)
-//       stop_reason="stop_sequence"  → idle (user pressed Esc)
-//       thinking-only                → intermediate, ignored
+//     stop_reason=null + tool_use  → working (tool loop continues)
+//     stop_reason=null + text only → idle (final response, no stop_reason on streaming)
+//     stop_reason="end_turn"       → idle (normal completion)
+//     stop_reason="stop_sequence"  → idle (user pressed Esc)
+//     thinking-only                → intermediate, ignored
 func (c *Claude) ParseNewLines(lines []string, _ string) []adapter.Event {
 	var events []adapter.Event
 	cwdEmitted := false
@@ -273,7 +273,7 @@ func (c *Claude) ParseNewLines(lines []string, _ string) []adapter.Event {
 				}
 			}
 			events = append(events, adapter.Event{
-				Status: &adapter.Status{Working: true},
+				Status: &adapter.Status{Working: true, Label: "Thinking"},
 			})
 
 		case "assistant":
@@ -305,16 +305,16 @@ func (c *Claude) ParseNewLines(lines []string, _ string) []adapter.Event {
 				// Tool use = still working (will get tool result, then continue).
 				// Re-assert working so recovery from transient states works.
 				events = append(events, adapter.Event{
-					Status: &adapter.Status{Working: true},
+					Status: &adapter.Status{Working: true, Label: "Thinking"},
 				})
 			case hasText:
 				// Text with no tool_use = turn complete (end_turn, stop_sequence,
 				// or streaming null stop_reason). All mean idle.
 				events = append(events, adapter.Event{
-					Status: &adapter.Status{},
+					Status: &adapter.Status{Label: "Waiting for input"},
 					Unread: adapter.BoolPtr(true),
 				})
-			// thinking-only = intermediate, no event.
+				// thinking-only = intermediate, no event.
 			}
 		}
 	}

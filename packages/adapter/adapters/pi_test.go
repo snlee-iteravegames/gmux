@@ -352,6 +352,9 @@ func TestParseNewLinesUserMessage(t *testing.T) {
 	if events[0].Status == nil || !events[0].Status.Working {
 		t.Error("expected working=true status")
 	}
+	if events[0].Status.Label != "Thinking" {
+		t.Errorf("expected label Thinking, got %q", events[0].Status.Label)
+	}
 }
 
 func TestParseNewLinesNameDoesNotAffectStatus(t *testing.T) {
@@ -410,6 +413,9 @@ func TestParseNewLinesAssistantStop(t *testing.T) {
 	if events[0].Status == nil || events[0].Status.Working {
 		t.Error("expected working=false status on stop")
 	}
+	if events[0].Status.Label != "Waiting for input" {
+		t.Errorf("expected label Waiting for input, got %q", events[0].Status.Label)
+	}
 	if events[0].Unread == nil || !*events[0].Unread {
 		t.Error("expected unread=true on stop (turn complete)")
 	}
@@ -425,6 +431,9 @@ func TestParseNewLinesAssistantToolUse(t *testing.T) {
 	}
 	if events[0].Status == nil || !events[0].Status.Working {
 		t.Error("expected working=true for toolUse (agent loop continues)")
+	}
+	if events[0].Status.Label != "Thinking" {
+		t.Errorf("expected label Thinking, got %q", events[0].Status.Label)
 	}
 }
 
@@ -490,6 +499,9 @@ func TestParseNewLinesAssistantErrorExhausted(t *testing.T) {
 	if !events[0].Status.Error {
 		t.Error("expected error=true after exhausted retries")
 	}
+	if events[0].Status.Label != "Error" {
+		t.Errorf("expected label Error, got %q", events[0].Status.Label)
+	}
 }
 
 func TestParseNewLinesErrorExhaustedIgnoresCustomEvents(t *testing.T) {
@@ -542,6 +554,9 @@ func TestParseNewLinesErrorAutoRetry(t *testing.T) {
 	}
 	if events[0].Status == nil || !events[0].Status.Working {
 		t.Error("expected working=true (retry continues)")
+	}
+	if events[0].Status.Label != "Thinking" {
+		t.Errorf("expected retry label Thinking, got %q", events[0].Status.Label)
 	}
 }
 
@@ -612,6 +627,9 @@ func TestParseNewLinesFullTurnCycle(t *testing.T) {
 	last := events[len(events)-1]
 	if last.Status == nil || last.Status.Working {
 		t.Error("last event should be idle (stop)")
+	}
+	if last.Status.Label != "Waiting for input" {
+		t.Errorf("last event label = %q, want Waiting for input", last.Status.Label)
 	}
 }
 
