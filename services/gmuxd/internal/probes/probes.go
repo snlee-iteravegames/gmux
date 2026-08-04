@@ -4,6 +4,8 @@ package probes
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -13,10 +15,12 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+	"unicode"
 
 	"github.com/gmuxapp/gmux/packages/paths"
 )
@@ -40,8 +44,13 @@ type DirectoryProbe struct {
 }
 
 type GitProbe struct {
-	Branch     string `json:"branch"`
-	DirtyCount int    `json:"dirty_count"`
+	Branch         string `json:"branch"`
+	DirtyCount     int    `json:"dirty_count"`
+	RepositoryKey  string `json:"repository_key,omitempty"`
+	RepositoryName string `json:"repository_name,omitempty"`
+	Upstream       string `json:"upstream,omitempty"`
+	Ahead          *int   `json:"ahead,omitempty"`
+	Behind         *int   `json:"behind,omitempty"`
 }
 
 type PRProbe struct {
@@ -400,8 +409,77 @@ func collectGit(parent context.Context, root string, timeout time.Duration) (*Gi
 	if len(status) > 0 && status[len(status)-1] != '\n' {
 		dirty++
 	}
-	remotes, err := commandOutput(ctx, "", maxCommandOutput, "git", "-C", root, "remote", "-v")
-	return &GitProbe{Branch: branch, DirtyCount: dirty}, err == nil && hasGitHubRemote(remotes)
+	probe := &GitProbe{Branch: branch, DirtyCount: dirty}
+	remotes, remoteErr := commandOutput(ctx, "", maxCommandOutput, "git", "-C", root, "remote", "-v")
+
+	// Everything below is optional enrichment. A slow or older Git must not
+	// discard the branch/dirty result already collected above.
+	if commonOut, commonErr := commandOutput(ctx, "", maxCommandOutput, "git", "-C", root, "rev-parse", "--path-format=absolute", "--git-common-dir"); commonErr == nil {
+		if commonDir, canonicalErr := canonicalGitCommonDir(root, commonOut); canonicalErr == nil {
+			sum := sha256.Sum256([]byte(commonDir))
+			probe.RepositoryKey = hex.EncodeToString(sum[:])
+			probe.RepositoryName = repositoryName(commonDir)
+		}
+	}
+	if upstreamOut, upstreamErr := commandOutput(ctx, "", maxValueLength, "git", "-C", root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"); upstreamErr == nil {
+		upstream := strings.TrimSpace(string(upstreamOut))
+		if upstream != "" && len(upstream) <= maxValueLength {
+			probe.Upstream = upstream
+			if countsOut, countsErr := commandOutput(ctx, "", 128, "git", "-C", root, "rev-list", "--left-right", "--count", "HEAD...@{upstream}"); countsErr == nil {
+				fields := strings.Fields(string(countsOut))
+				if len(fields) == 2 {
+					ahead, aheadErr := strconv.Atoi(fields[0])
+					behind, behindErr := strconv.Atoi(fields[1])
+					if aheadErr == nil && behindErr == nil && ahead >= 0 && behind >= 0 {
+						probe.Ahead = &ahead
+						probe.Behind = &behind
+					}
+				}
+			}
+		}
+	}
+	return probe, remoteErr == nil && hasGitHubRemote(remotes)
+}
+
+func canonicalGitCommonDir(root string, output []byte) (string, error) {
+	commonDir := strings.TrimSpace(string(output))
+	if commonDir == "" {
+		return "", errors.New("empty git common dir")
+	}
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(root, commonDir)
+	}
+	absolute, err := filepath.Abs(commonDir)
+	if err != nil {
+		return "", err
+	}
+	canonical, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(canonical)
+	if err != nil || !info.IsDir() {
+		return "", errors.New("git common dir is not a directory")
+	}
+	return filepath.Clean(canonical), nil
+}
+
+func repositoryName(commonDir string) string {
+	name := filepath.Base(filepath.Dir(commonDir))
+	name = strings.TrimSpace(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, name))
+	if name == "" || name == "." || name == string(filepath.Separator) {
+		return ""
+	}
+	runes := []rune(name)
+	if len(runes) > maxLabelLength {
+		name = string(runes[:maxLabelLength])
+	}
+	return name
 }
 
 func hasGitHubRemote(output []byte) bool {

@@ -11,7 +11,9 @@ import { TerminalView } from './terminal'
 import { useArrivalPulse } from './use-arrival-pulse'
 import { Sidebar } from './sidebar'
 import { usePresence } from './use-presence'
+import { FolderProbeMetadata } from './folder-probe'
 
+import type { DirectoryProbe } from '@gmux/protocol'
 import type { Session } from './types'
 import { SettingsModal } from './settings'
 import { ProjectHub } from './project-hub'
@@ -20,7 +22,7 @@ import { installCopySession } from './mock-data/export-session'
 import { installVersionWatch } from './version-watch'
 
 import {
-  sessions, connState, selected, selectedId, view, health, peers,
+  sessions, folders, connState, selected, selectedId, view, health, peers,
   terminalOptions, keybinds, macCommandIsCtrl,
   unreadCount, keyboardOpen, terminalScrolledUp, terminalScrollToBottom,
   urlPath, urlSearch,
@@ -64,8 +66,9 @@ for (const type of ['gesturestart', 'gesturechange', 'gestureend']) {
 
 // ── Components ──
 
-function MainHeader({ session, onRestart }: {
+function MainHeader({ session, probe, onRestart }: {
   session: Session | null
+  probe?: DirectoryProbe
   onRestart?: () => void
 }) {
   if (!session) {
@@ -112,6 +115,7 @@ function MainHeader({ session, onRestart }: {
           <span class="main-header-chip">{session.kind}</span>
           <span class="main-header-cwd" title={session.cwd}>{shortCwd}</span>
           <span class="main-header-chip">{version}</span>
+          <FolderProbeMetadata probe={probe} className="main-header-probe" />
         </div>
       </div>
       <div class="main-header-right">
@@ -485,6 +489,10 @@ function App() {
   const viewVal = view.value
   const selId = selectedId.value
   const selectedVal = selected.value
+  const foldersVal = folders.value
+  const selectedProbe = selectedVal
+    ? foldersVal.find(folder => folder.sessions.some(session => session.id === selectedVal.id))?.probe
+    : undefined
   const sessionsVal = sessions.value
   const connVal = connState.value
   const termOpts = terminalOptions.value
@@ -586,6 +594,7 @@ function App() {
         {viewVal !== null && viewVal.kind !== 'project' && viewVal.kind !== 'home' && (
           <MainHeader
             session={selectedVal}
+            probe={selectedProbe}
             onRestart={selectedVal ? () => { restartSession(selectedVal.id).catch(err => console.error('restart failed:', err)) } : undefined}
           />
         )}

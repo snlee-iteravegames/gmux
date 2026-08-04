@@ -20,6 +20,7 @@ import {
 } from './store'
 import { HostSuffix } from './host-suffix'
 import { FolderProbeMetadata } from './folder-probe'
+import { deriveRepositorySidebarItems, repositoryGroupSummary } from './repository-groups'
 import type { Session, Folder } from './types'
 
 // ── Types ──
@@ -383,6 +384,7 @@ export function Sidebar({
   const curKey = currentProjectKey.value
   const am = activityMap.value
   const peerStatus = peerStatusByName.value
+  const sidebarItems = deriveRepositorySidebarItems(foldersVal)
 
   // Waiting indicator on the logo: mirrors the mobile hamburger badge so
   // the always-visible brand mark doubles as a "a session elsewhere is
@@ -433,10 +435,10 @@ export function Sidebar({
           </button>
         </div>
         <div class="sidebar-scroll">
-          {foldersVal.map(f => (
+          {sidebarItems.map(item => item.kind === 'folder' ? (
             <FolderGroup
-              key={f.key}
-              folder={f}
+              key={item.folder.key}
+              folder={item.folder}
               selId={selId}
               currentKey={curKey}
               resumingId={resumingId}
@@ -445,7 +447,51 @@ export function Sidebar({
               onCloseSession={onCloseSession}
               onClick={onClose}
             />
-          ))}
+          ) : (() => {
+            const summary = repositoryGroupSummary(item)
+            return (
+              <section
+                key={item.key}
+                class="repository-group"
+                aria-label={`${item.name} repository group, ${summary}`}
+              >
+                <div class="repository-group-header">
+                  <span
+                    class={`folder-aggregate-dot ${item.aggregate.urgency}`}
+                    aria-hidden="true"
+                  />
+                  <div class="repository-group-heading">
+                    <div class="repository-group-name">
+                      {item.name}
+                      <HostSuffix peer={item.peer ?? localHostLabel.value} local={!item.peer} />
+                    </div>
+                    <div class="repository-group-summary">{summary}</div>
+                  </div>
+                </div>
+                <div class="repository-lanes">
+                  {item.lanes.map(lane => (
+                    <div
+                      key={lane.key}
+                      class="repository-lane"
+                      role="group"
+                      aria-label={`Worktree lane ${lane.name}`}
+                    >
+                      <FolderGroup
+                        folder={lane}
+                        selId={selId}
+                        currentKey={curKey}
+                        resumingId={resumingId}
+                        am={am}
+                        peerStatus={peerStatus}
+                        onCloseSession={onCloseSession}
+                        onClick={onClose}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )
+          })())}
           {connected && !hasProjects && (
             <div class="sidebar-empty-launch">
               <LaunchButton

@@ -258,6 +258,51 @@ body {
 
 /* ── Folder ── */
 
+.repository-group {
+  flex: 0 0 auto;
+  margin: 4px 8px 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  overflow: hidden;
+}
+.repository-group:first-child { margin-top: 0; }
+.repository-group-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 8px;
+  background: color-mix(in srgb, var(--bg-surface) 72%, transparent);
+}
+.repository-group-heading {
+  min-width: 0;
+  overflow: hidden;
+}
+.repository-group-name {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.repository-group-summary {
+  overflow: hidden;
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.repository-lanes {
+  border-top: 1px solid var(--border);
+}
+.repository-lane + .repository-lane {
+  border-top: 1px solid var(--border);
+}
+.repository-lane .folder-header {
+  padding-left: 10px;
+}
+
 .folder + .folder {
   margin-top: 4px;
   padding-top: 4px;
@@ -496,6 +541,11 @@ body {
   margin-top: 6px;
   max-width: min(100%, 720px);
   font-size: 10px;
+}
+.folder-probe-metadata.main-header-probe {
+  flex: 1 1 auto;
+  margin-top: 0;
+  font-size: 9px;
 }
 .probe-status-neutral { color: var(--text-muted); }
 .probe-status-info { color: var(--accent); }
@@ -2318,6 +2368,12 @@ body {
   }
 
   .main-header-meta {
+    flex: 0 1 42vw;
+    overflow: hidden;
+  }
+
+  .main-header-meta > .main-header-chip,
+  .main-header-meta > .main-header-cwd {
     display: none;
   }
 
