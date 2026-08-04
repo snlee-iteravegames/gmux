@@ -77,7 +77,11 @@ describe('protocol schemas', () => {
       projects: [],
       directory_probes: {
         '/Users/lee/Workspace/gmux': {
-          git: { branch: 'main', dirty_count: 2 },
+          git: {
+            branch: 'main', dirty_count: 2,
+            repository_key: 'opaque-repository-key', repository_name: 'gmux',
+            upstream: 'origin/main', ahead: 3, behind: 1,
+          },
           pr: { number: 42, status: 'open', url: 'https://example.com/pr/42' },
           scripts: [{
             id: 'ci', label: 'CI', value: 'passing', status: 'success',
@@ -87,7 +91,13 @@ describe('protocol schemas', () => {
       },
     })
 
-    expect(payload.directory_probes?.['/Users/lee/Workspace/gmux'].git?.dirty_count).toBe(2)
+    const git = payload.directory_probes?.['/Users/lee/Workspace/gmux'].git
+    expect(git?.dirty_count).toBe(2)
+    expect(git?.repository_key).toBe('opaque-repository-key')
+    expect(git?.repository_name).toBe('gmux')
+    expect(git?.upstream).toBe('origin/main')
+    expect(git?.ahead).toBe(3)
+    expect(git?.behind).toBe(1)
     expect(payload.projects).toEqual([])
   })
 
@@ -104,6 +114,13 @@ describe('protocol schemas', () => {
     })
     expect(payload.peer_directory_probes?.tower['/home/alice/work/gmux'].git?.branch)
       .toBe('remote-main')
+  })
+
+  it('accepts legacy git probes without repository or upstream metadata', () => {
+    const payload = DirectoryProbePayloadSchema.parse({
+      directory_probes: { '/work/legacy': { git: { branch: 'main', dirty_count: 0 } } },
+    })
+    expect(payload.directory_probes?.['/work/legacy'].git?.repository_key).toBeUndefined()
   })
 
   it('accepts legacy payloads without directory probes', () => {

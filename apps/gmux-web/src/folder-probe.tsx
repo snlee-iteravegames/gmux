@@ -26,6 +26,13 @@ export function folderProbeText(probe: DirectoryProbe | undefined): string[] {
   if (probe.git) {
     items.push(probe.git.branch)
     items.push(`${probe.git.dirty_count} dirty`)
+    if (probe.git.upstream) {
+      const divergence = [
+        probe.git.ahead !== undefined ? `↑${probe.git.ahead}` : '',
+        probe.git.behind !== undefined ? `↓${probe.git.behind}` : '',
+      ].filter(Boolean).join(' ')
+      items.push(`${probe.git.upstream}${divergence ? ` ${divergence}` : ''}`)
+    }
   }
   if (probe.pr) items.push(`#${probe.pr.number} ${probe.pr.status}`)
   for (const script of probe.scripts ?? []) {
@@ -72,8 +79,12 @@ export function FolderProbeMetadata({
 }) {
   if (folderProbeText(probe).length === 0 || !probe) return null
 
+  const accessibleText = folderProbeText(probe).join(', ')
   return (
-    <div class={`folder-probe-metadata${className ? ` ${className}` : ''}`}>
+    <div
+      class={`folder-probe-metadata${className ? ` ${className}` : ''}`}
+      aria-label={`Directory status: ${accessibleText}`}
+    >
       {probe.git && (
         <>
           <span class="folder-probe-item probe-git" title={`Git branch ${probe.git.branch}`}>
@@ -85,6 +96,16 @@ export function FolderProbeMetadata({
           >
             {probe.git.dirty_count} dirty
           </span>
+          {probe.git.upstream && (
+            <span
+              class={`folder-probe-item probe-status-${(probe.git.behind ?? 0) > 0 ? 'warning' : (probe.git.ahead ?? 0) > 0 ? 'info' : 'neutral'}`}
+              title={`Upstream ${probe.git.upstream}: ${probe.git.ahead ?? 0} ahead, ${probe.git.behind ?? 0} behind`}
+            >
+              {probe.git.upstream}
+              {probe.git.ahead !== undefined && ` ↑${probe.git.ahead}`}
+              {probe.git.behind !== undefined && ` ↓${probe.git.behind}`}
+            </span>
+          )}
         </>
       )}
       {probe.pr && (

@@ -42,6 +42,11 @@ export const DirectoryProbeStatusSchema = z.enum([
 export const GitProbeSchema = z.object({
   branch: z.string(),
   dirty_count: z.number().int().nonnegative(),
+  repository_key: z.string().optional(),
+  repository_name: z.string().optional(),
+  upstream: z.string().optional(),
+  ahead: z.number().int().nonnegative().optional(),
+  behind: z.number().int().nonnegative().optional(),
 })
 
 export const PullRequestProbeSchema = z.object({

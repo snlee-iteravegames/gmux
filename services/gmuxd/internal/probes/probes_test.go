@@ -31,6 +31,12 @@ func TestCollectGitBranchAndDirtyCount(t *testing.T) {
 	if git.DirtyCount != 1 {
 		t.Fatalf("dirty_count = %d, want 1", git.DirtyCount)
 	}
+	if git.RepositoryKey == "" || git.RepositoryName != filepath.Base(root) {
+		t.Fatalf("repository identity = %q/%q, want opaque key and %q", git.RepositoryKey, git.RepositoryName, filepath.Base(root))
+	}
+	if git.Upstream != "" || git.Ahead != nil || git.Behind != nil {
+		t.Fatalf("repository without upstream returned tracking data: %#v", git)
+	}
 	if github {
 		t.Fatal("repository without remotes reported a GitHub remote")
 	}
@@ -40,6 +46,79 @@ func TestCollectGitNonRepositoryIsOmitted(t *testing.T) {
 	git, github := collectGit(context.Background(), t.TempDir(), 2*time.Second)
 	if git != nil || github {
 		t.Fatalf("non-repository returned git=%#v github=%v", git, github)
+	}
+}
+
+func TestCollectGitLinkedWorktreesShareRepositoryIdentity(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	parent := t.TempDir()
+	root := filepath.Join(parent, "shared-repository")
+	linked := filepath.Join(parent, "feature-worktree")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runTestCommand(t, root, "git", "init", "-b", "main")
+	runTestCommand(t, root, "git", "config", "user.email", "probe@example.com")
+	runTestCommand(t, root, "git", "config", "user.name", "Probe Test")
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("base"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runTestCommand(t, root, "git", "add", "tracked.txt")
+	runTestCommand(t, root, "git", "commit", "-m", "base")
+	runTestCommand(t, root, "git", "worktree", "add", "-b", "feature", linked)
+
+	mainProbe, _ := collectGit(context.Background(), root, 2*time.Second)
+	linkedProbe, _ := collectGit(context.Background(), linked, 2*time.Second)
+	if mainProbe == nil || linkedProbe == nil {
+		t.Fatalf("linked probes missing: main=%#v linked=%#v", mainProbe, linkedProbe)
+	}
+	if mainProbe.RepositoryKey == "" || mainProbe.RepositoryKey != linkedProbe.RepositoryKey {
+		t.Fatalf("repository keys differ: %q != %q", mainProbe.RepositoryKey, linkedProbe.RepositoryKey)
+	}
+	if mainProbe.RepositoryName != "shared-repository" || linkedProbe.RepositoryName != mainProbe.RepositoryName {
+		t.Fatalf("repository names differ: %q/%q", mainProbe.RepositoryName, linkedProbe.RepositoryName)
+	}
+}
+
+func TestCollectGitUpstreamDivergenceIsOptional(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	parent := t.TempDir()
+	remote := filepath.Join(parent, "remote.git")
+	root := filepath.Join(parent, "checkout")
+	runTestCommand(t, parent, "git", "init", "--bare", remote)
+	runTestCommand(t, parent, "git", "clone", remote, root)
+	runTestCommand(t, root, "git", "config", "user.email", "probe@example.com")
+	runTestCommand(t, root, "git", "config", "user.name", "Probe Test")
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("base"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runTestCommand(t, root, "git", "add", "tracked.txt")
+	runTestCommand(t, root, "git", "commit", "-m", "base")
+	runTestCommand(t, root, "git", "push", "-u", "origin", "HEAD")
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("ahead"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runTestCommand(t, root, "git", "commit", "-am", "ahead")
+
+	probe, _ := collectGit(context.Background(), root, 2*time.Second)
+	if probe == nil {
+		t.Fatal("expected git probe")
+	}
+	branch := probe.Branch
+	if probe.Upstream != "origin/"+branch || probe.Ahead == nil || *probe.Ahead != 1 || probe.Behind == nil || *probe.Behind != 0 {
+		t.Fatalf("unexpected upstream divergence: %#v", probe)
+	}
+
+	// A broken tracking configuration may make optional commands fail, but the
+	// established branch/dirty probe must remain available.
+	runTestCommand(t, root, "git", "config", "branch."+branch+".merge", "refs/heads/missing")
+	probe, _ = collectGit(context.Background(), root, 2*time.Second)
+	if probe == nil || probe.Branch != branch {
+		t.Fatalf("optional upstream failure discarded base git probe: %#v", probe)
 	}
 }
 
