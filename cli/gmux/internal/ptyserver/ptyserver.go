@@ -569,7 +569,7 @@ func (s *Server) handleHookEvent(w http.ResponseWriter, r *http.Request) {
 		// Agent-loop transition. The extension reports phase + outcome; the
 		// sidebar policy (what an outcome means) lives here, in testable Go.
 		if ev.Phase == "start" {
-			s.state.SetStatus(&adapter.Status{Working: true})
+			s.state.SetStatus(&adapter.Status{Working: true, Label: "Thinking"})
 			break
 		}
 		s.applyTurnEnd(ev.Outcome, ev.Title)
@@ -584,7 +584,15 @@ func (s *Server) handleHookEvent(w http.ResponseWriter, r *http.Request) {
 //	error     — the agent gave up (e.g. exhausted retries); show a red dot.
 //	aborted   — the user interrupted; just go idle, nothing unread.
 func (s *Server) applyTurnEnd(outcome, title string) {
-	s.state.SetStatus(&adapter.Status{Working: false, Error: outcome == "error"})
+	status := &adapter.Status{Working: false}
+	switch outcome {
+	case "completed":
+		status.Label = "Waiting for input"
+	case "error":
+		status.Error = true
+		status.Label = "Error"
+	}
+	s.state.SetStatus(status)
 	if outcome == "completed" {
 		s.state.SetUnread(true)
 	}

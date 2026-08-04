@@ -204,10 +204,10 @@ func TestTurnEventDrivesState(t *testing.T) {
 
 	post(`{"op":"turn","phase":"start"}`)
 	deadline := time.After(2 * time.Second)
-	for s := st.StatusSnapshot(); s == nil || !s.Working; s = st.StatusSnapshot() {
+	for s := st.StatusSnapshot(); s == nil || !s.Working || s.Label != "Thinking"; s = st.StatusSnapshot() {
 		select {
 		case <-deadline:
-			t.Fatalf("status never went working; got %+v", st.StatusSnapshot())
+			t.Fatalf("status never went Thinking; got %+v", st.StatusSnapshot())
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
@@ -216,7 +216,7 @@ func TestTurnEventDrivesState(t *testing.T) {
 	deadline = time.After(2 * time.Second)
 	for {
 		s := st.StatusSnapshot()
-		if s != nil && !s.Working && st.Title() == "my chat" && st.UnreadSnapshot() {
+		if s != nil && !s.Working && s.Label == "Waiting for input" && st.Title() == "my chat" && st.UnreadSnapshot() {
 			break
 		}
 		select {
@@ -278,10 +278,11 @@ func TestApplyTurnEnd(t *testing.T) {
 		outcome    string
 		wantUnread bool
 		wantError  bool
+		wantLabel  string
 	}{
-		{"completed", true, false},
-		{"aborted", false, false},
-		{"error", false, true},
+		{"completed", true, false, "Waiting for input"},
+		{"aborted", false, false, ""},
+		{"error", false, true, "Error"},
 	}
 	for _, tc := range cases {
 		st := session.New(session.Config{ID: "s1", Kind: "pi"})
@@ -296,6 +297,9 @@ func TestApplyTurnEnd(t *testing.T) {
 		}
 		if status != nil && status.Error != tc.wantError {
 			t.Errorf("%s: error=%v want %v", tc.outcome, status.Error, tc.wantError)
+		}
+		if status != nil && status.Label != tc.wantLabel {
+			t.Errorf("%s: label=%q want %q", tc.outcome, status.Label, tc.wantLabel)
 		}
 	}
 }
