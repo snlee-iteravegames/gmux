@@ -26,6 +26,7 @@ export default {
   unread: false,
   socket_path: '/tmp/gmux-sessions/mock.sock',
   peer: 'devcontainer',
+  project_slug: 'my-project',
   terminal: [
     `${GRAY}╭──────────────────────────────────────────────────────╮${RST}`,
     `${GRAY}│${RST} ${BOLD}${MAGENTA}●${RST} ${BOLD}pi${RST} ${DIM}— fix scrollback${RST}${GRAY}                                  │${RST}`,

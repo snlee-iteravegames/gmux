@@ -18,7 +18,7 @@ import type { Session, ProjectItem, DiscoveredProject, PeerInfo, PeerProject, La
 import type { View } from './routing'
 import { resolveViewFromPath, viewToPath } from './routing'
 import { navigateWithReload } from './version-watch'
-import { buildProjectFolders, discoverProjects, normalizeWorkspacePath } from './projects'
+import { buildProjectFolders, discoverProjects, matchSession, normalizeWorkspacePath } from './projects'
 import { resolveReferences, removeReferenceItems, removeHostReferenceItems, refKey, type UnresolvedHost } from './references'
 
 import { fetchFrontendConfig, buildTerminalOptions, resolveKeybinds, type ResolvedKeybind } from './config'
@@ -1292,7 +1292,12 @@ export function initStore(): () => void {
   if (USE_MOCK) {
     const localHost = new URLSearchParams(location.search).get('host')
     const mockSessions = localHost
-      ? MOCK_SESSIONS.map(s => s.peer === localHost ? { ...s, peer: undefined } : s)
+      ? MOCK_SESSIONS.map(s => {
+          if (s.peer !== localHost) return s
+          const local = { ...s, peer: undefined }
+          const matchedProject = matchSession(local, MOCK_PROJECTS)
+          return matchedProject ? { ...local, project_slug: matchedProject.slug } : local
+        })
       : [...MOCK_SESSIONS]
     batch(() => {
       _setRawWorld({

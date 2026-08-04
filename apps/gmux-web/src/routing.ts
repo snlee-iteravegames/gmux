@@ -120,7 +120,11 @@ export function resolveSessionFromPath(
       if (!claimedHere && !automaticHere) return false
     } else {
       // Local project: claimed-local, disclaimed-adopted, or a derived folder.
-      const claimedHere = !s.peer && s.project_slug === projectSlug
+      // Parent-owned projects can contain sessions from a Local peer such as
+      // a devcontainer. Their URL uses the mid-path @host segment, so accept a
+      // matching stamp when that explicit host is present.
+      const claimedHere = s.project_slug === projectSlug
+        && (!s.peer || (filterHost !== undefined && s.peer === filterHost))
       const adoptedHere = !s.project_slug
         && matchSession(s, projects)?.slug === projectSlug
       const automaticHere = !s.peer && isInAutomaticFolder(s, projectSlug)

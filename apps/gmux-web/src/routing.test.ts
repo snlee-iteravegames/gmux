@@ -207,6 +207,18 @@ describe('resolveSessionFromPath', () => {
     expect(id).toBe('sess-t1@tower')
   })
 
+  it('resolves a parent-owned stamped session on an explicit local-peer host path', () => {
+    const container = makeSession({
+      id: 'sess-c@devcontainer', cwd: '/workspace/gmux', kind: 'pi', slug: 'fix-auth',
+      peer: 'devcontainer', project_slug: 'gmux', project_index: 0,
+    })
+    const id = resolveSessionFromPath(
+      { project: 'gmux', host: 'devcontainer', adapter: 'pi', slug: 'fix-auth' },
+      projects, [container],
+    )
+    expect(id).toBe('sess-c@devcontainer')
+  })
+
   it('peer-owned project URL ignores local-stamped same-slug sessions', () => {
     const localGmux = makeSession({
       id: 'sess-local', cwd: '/dev/gmux', kind: 'pi', slug: 'fix-auth',
@@ -278,6 +290,16 @@ describe('resolveViewFromPath', () => {
   it('full session path resolves to session view', () => {
     expect(resolveViewFromPath('/gmux/pi/fix-auth', projects, sessions)).toEqual({
       kind: 'session', sessionId: 'sess-1',
+    })
+  })
+
+  it('local project path with an explicit local-peer host resolves its stamped session', () => {
+    const container = makeSession({
+      id: 'sess-c@devcontainer', cwd: '/workspace/gmux', kind: 'pi', slug: 'fix-auth',
+      peer: 'devcontainer', project_slug: 'gmux', project_index: 0,
+    })
+    expect(resolveViewFromPath('/gmux/@devcontainer/pi/fix-auth', projects, [container])).toEqual({
+      kind: 'session', sessionId: 'sess-c@devcontainer',
     })
   })
 
