@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -81,13 +83,23 @@ func TestSessionSocketDir(t *testing.T) {
 		t.Setenv("GMUX_SOCKET_DIR", "")
 		t.Setenv("XDG_RUNTIME_DIR", "")
 		got := SessionSocketDir()
-		want := filepath.Join(os.TempDir(), fmt.Sprintf("gmux-sessions-%d", os.Getuid()))
+		tempDir := os.TempDir()
+		if runtime.GOOS == "darwin" {
+			tempDir = "/tmp"
+		}
+		want := filepath.Join(tempDir, fmt.Sprintf("gmux-sessions-%d", os.Getuid()))
 		if got != want {
 			t.Errorf("SessionSocketDir() = %q, want %q", got, want)
 		}
 		// Must not be the old world-shared path.
 		if got == "/tmp/gmux-sessions" {
 			t.Errorf("SessionSocketDir() must not default to the shared /tmp/gmux-sessions")
+		}
+		if runtime.GOOS == "darwin" {
+			legacySocket := filepath.Join(got, strings.Repeat("a", 36)+".sock")
+			if len(legacySocket) >= 104 {
+				t.Errorf("legacy UUID socket path is too long for Darwin: %d bytes: %s", len(legacySocket), legacySocket)
+			}
 		}
 	})
 }
@@ -108,16 +120,16 @@ func TestIsValidSessionID(t *testing.T) {
 
 	invalid := []string{
 		"",
-		"abcd1234",          // missing prefix
-		"sess-",             // empty suffix
-		"sess-../escape",    // path traversal
-		"sess-..",           // parent dir
-		"../sess-abcd",      // leading traversal
-		"sess-a/b",          // separator
-		`sess-a\b`,          // backslash separator
-		"sess-a::b",         // folder-key separator
-		"sess-a b",          // space
-		"sess-a\n",          // newline
+		"abcd1234",       // missing prefix
+		"sess-",          // empty suffix
+		"sess-../escape", // path traversal
+		"sess-..",        // parent dir
+		"../sess-abcd",   // leading traversal
+		"sess-a/b",       // separator
+		`sess-a\b`,       // backslash separator
+		"sess-a::b",      // folder-key separator
+		"sess-a b",       // space
+		"sess-a\n",       // newline
 	}
 	for _, id := range invalid {
 		if IsValidSessionID(id) {

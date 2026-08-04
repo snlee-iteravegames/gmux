@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 )
 
@@ -47,6 +48,10 @@ func SocketPath() string {
 //     standard per-user, 0700, tmpfs-backed runtime dir on Linux), else
 //   - a per-uid subdirectory of the system temp dir, e.g.
 //     /tmp/gmux-sessions-1000.
+//
+// On macOS os.TempDir() is normally a long /var/folders/... path. Unix socket
+// paths there exceed Darwin's 104-byte sockaddr_un limit when resuming legacy
+// UUID-shaped session IDs, so use the equivalent short /tmp spelling.
 func SessionSocketDir() string {
 	if d := os.Getenv("GMUX_SOCKET_DIR"); d != "" {
 		return d
@@ -54,7 +59,11 @@ func SessionSocketDir() string {
 	if rt := os.Getenv("XDG_RUNTIME_DIR"); rt != "" {
 		return filepath.Join(rt, "gmux", "sessions")
 	}
-	return filepath.Join(os.TempDir(), fmt.Sprintf("gmux-sessions-%d", os.Getuid()))
+	tempDir := os.TempDir()
+	if runtime.GOOS == "darwin" {
+		tempDir = "/tmp"
+	}
+	return filepath.Join(tempDir, fmt.Sprintf("gmux-sessions-%d", os.Getuid()))
 }
 
 // StateDir returns the gmux state directory (~/.local/state/gmux).
