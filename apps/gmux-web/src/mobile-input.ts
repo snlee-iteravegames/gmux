@@ -1,85 +1,45 @@
 /**
- * Mobile keyboard input fixes for xterm.js.
+ * Single-owner mobile IME input for xterm.js.
  *
- * Problem: mobile keyboards (iOS autocorrect, dictation, predictive text)
- * replace words in xterm's hidden textarea rather than appending. xterm.js
- * doesn't distinguish replacements from appends, so each replacement
- * re-sends text that was already on screen, causing cascading duplication.
+ * Android virtual keyboards edit xterm's hidden textarea as a document. The
+ * stock xterm path combines a composition overlay, a deferred composition
+ * finalizer, and a second keyCode-229 textarea diff. Samsung Keyboard can
+ * therefore show pre-edit text over text already echoed by the PTY, commit a
+ * word only on Space, and later resend text that the user deleted.
  *
- * The replacement signal differs by platform:
+ * On a coarse-pointer device, once an IME signal is observed, gmux owns the
+ * textarea for that focus lifetime. Events are intercepted on an ancestor in
+ * capture phase, before xterm's target listeners:
  *
- *   iOS Safari: a single insertText (or insertReplacementText) with a
- *   non-collapsed selection (selectionStart < selectionEnd).
+ * - composition events still update the native textarea but never activate
+ *   xterm's overlay/finalizer;
+ * - keyCode 229 never starts xterm's deferred textarea diff;
+ * - each input transforms the previous textarea value into the new value with
+ *   DELs plus the changed suffix and sends that transition exactly once.
  *
- *   Android Chrome: a deleteContentBackward with non-collapsed selection,
- *   immediately followed by an insertText with collapsed selection. Same
- *   logical operation, split into two DOM events.
- *
- * Fix: two-phase interception.
- *
- *   beforeinput (textarea, capture): detect the replacement signal (iOS:
- *   non-collapsed selection on insertText; Android: deleteContentBackward
- *   with non-collapsed selection, carried forward to the next insertText).
- *   Send backspaces to erase from the replacement start to the end of the
- *   textarea.
- *
- *   input (container, capture): fires before xterm's handler on the textarea
- *   because capture goes parent-first. We stopImmediatePropagation() to
- *   prevent xterm from also sending ev.data, then send the replacement text
- *   plus the preserved suffix ourselves.
- *
- * Android has an additional complication: keydown events with keyCode 229
- * trigger xterm's CompositionHelper._handleAnyTextareaChanges, which uses
- * String.replace(oldValue, '') to diff the textarea. This works for pure
- * appends but produces garbage when the keyboard modifies the middle of the
- * string (the old value isn't a substring of the new value, so replace()
- * returns the entire textarea). We neutralize this by resetting
- * textarea.value to its pre-autocorrect state after sending the correct
- * data, so the deferred diff sees no change.
- *
- * This approach never calls preventDefault(), so it works regardless of
- * whether the browser considers beforeinput cancelable for the given
- * inputType and element type (a known cross-browser inconsistency).
- *
- * Assumption: the terminal cursor sits right after the last character in the
- * textarea. This holds for the normal mobile typing flow where replacements
- * fire immediately after typing. Mobile on-screen keyboards don't have arrow
- * keys, and autocorrect/dictation don't fire after cursor movement.
- *
- * See also: /_/input-diagnostics for collecting real event traces.
+ * This streams Korean composition updates to the PTY immediately. The shell's
+ * normal echo is the only visible representation, so there is no overlay to
+ * drift away from the terminal cursor.
  */
 import type { Terminal } from '@xterm/xterm'
 
 type SendFn = (data: string) => void
 
-interface PendingReplacement {
-  newText: string
-  suffix: string
-  /** When set, reset textarea.value after sending to neutralize xterm's
-   *  _handleAnyTextareaChanges deferred diff (Android keyCode-229 path). */
-  resetValue?: string
+interface EditSnapshot {
+  value: string
+  inputType: string
 }
 
-/** Tracks a deleteContentBackward with non-collapsed selection so the
- *  immediately following insertText can be recognized as a replacement. */
-interface TrackedDeletion {
-  preDeleteValue: string
-  deleteStart: number
-  deleteEnd: number
+/** Transform an end-positioned terminal value into a new textarea value. */
+export function diffTextareaValues(oldValue: string, newValue: string): string {
+  const oldCodepoints = Array.from(oldValue)
+  const newCodepoints = Array.from(newValue)
+  let prefix = 0
+  const limit = Math.min(oldCodepoints.length, newCodepoints.length)
+  while (prefix < limit && oldCodepoints[prefix] === newCodepoints[prefix]) prefix++
+  return '\x7f'.repeat(oldCodepoints.length - prefix) + newCodepoints.slice(prefix).join('')
 }
 
-/**
- * Attach a handler that intercepts mobile keyboard word-replacement events
- * and translates them into terminal-compatible input sequences.
- *
- * Must be called after `term.open()` so `term.textarea` exists.
- * `container` should be the parent element of xterm's textarea (needed to
- * intercept input events in the capture phase before xterm sees them).
- * `send` should be the raw PTY send function (not sendInput, to avoid
- * ctrl/alt modifier interference; same convention as paste).
- *
- * Returns a cleanup function.
- */
 export function attachMobileInputHandler(
   term: Terminal,
   container: HTMLElement,
@@ -88,112 +48,242 @@ export function attachMobileInputHandler(
   const textarea = term.textarea
   if (!textarea) return () => {/* nothing to tear down */}
 
-  // Autocorrect / word-replacement is a mobile-keyboard concern (iOS,
-  // Android). On desktop, xterm.js manages the textarea selection
-  // internally and may leave non-collapsed ranges that our handler would
-  // misinterpret as autocorrect replacements, sending spurious backspaces.
-  // Track the pointer type dynamically so tablet-mode switches are handled.
   const pointerQuery = window.matchMedia('(pointer: coarse)')
   let isTouchPrimary = pointerQuery.matches
-  const onPointerChange = () => { isTouchPrimary = pointerQuery.matches }
-  pointerQuery.addEventListener('change', onPointerChange)
+  let streamingIme = false
+  let shadowValue = ''
+  let snapshot: EditSnapshot | null = null
+  let snapshotTimer: ReturnType<typeof setTimeout> | null = null
+  let enterKeyPending = false
+  let lineBreakHandled = false
+  let lineBreakTimer: ReturnType<typeof setTimeout> | null = null
 
-  let pending: PendingReplacement | null = null
-  let trackedDeletion: TrackedDeletion | null = null
-
-  /** Queue a replacement for phase 2 and send the necessary backspaces now. */
-  const queueReplacement = (
-    value: string,
-    selStart: number,
-    selEnd: number,
-    newText: string,
-    resetValue?: string,
-  ) => {
-    send('\x7f'.repeat(value.length - selStart))
-    pending = { newText, suffix: value.substring(selEnd), resetValue }
+  const clearSnapshot = () => {
+    if (snapshotTimer !== null) clearTimeout(snapshotTimer)
+    snapshotTimer = null
+    snapshot = null
   }
 
-  /** Extract inserted text from a beforeinput event. */
-  const resolveText = (ev: InputEvent) =>
-    ev.data ?? ev.dataTransfer?.getData('text/plain') ?? ''
+  const clearLineBreak = () => {
+    if (lineBreakTimer !== null) clearTimeout(lineBreakTimer)
+    lineBreakTimer = null
+    enterKeyPending = false
+    lineBreakHandled = false
+  }
 
-  // Phase 1: detect replacement and send backspaces.
-  const onBeforeInput = (ev: InputEvent) => {
+  const resetOwnership = () => {
+    streamingIme = false
+    shadowValue = ''
+    clearSnapshot()
+    clearLineBreak()
+  }
+
+  const activateStreaming = () => {
+    if (!streamingIme) {
+      streamingIme = true
+      shadowValue = textarea.value
+    }
+    clearSnapshot()
+  }
+
+  const stageSnapshot = (inputType: string) => {
+    clearSnapshot()
+    const staged = { value: textarea.value, inputType }
+    snapshot = staged
+    snapshotTimer = setTimeout(() => {
+      if (snapshot === staged) snapshot = null
+      snapshotTimer = null
+    }, 0)
+  }
+
+  const beginLineBreak = (ev: Event) => {
+    // A keyboard may finalize the last syllable immediately before the line
+    // break without a separate input event. Flush the current textarea first.
+    // If keydown's default action already inserted a textarea newline, it is
+    // only the DOM representation of Enter; never forward it as text as well
+    // as the terminal CR.
+    const finalValue = textarea.value.replace(/\r?\n$/, '')
+    const finalPayload = diffTextareaValues(shadowValue, finalValue)
+    if (finalPayload) send(finalPayload)
+    if (!lineBreakHandled) send('\r')
+    lineBreakHandled = true
+    enterKeyPending = false
+    clearSnapshot()
+    shadowValue = ''
+    textarea.value = ''
+    textarea.selectionStart = textarea.selectionEnd = 0
+    if (ev.cancelable) ev.preventDefault()
+    if (lineBreakTimer !== null) clearTimeout(lineBreakTimer)
+    lineBreakTimer = setTimeout(() => {
+      lineBreakHandled = false
+      lineBreakTimer = null
+    }, 0)
+  }
+
+  const onPointerChange = () => {
+    isTouchPrimary = pointerQuery.matches
+    if (!isTouchPrimary) resetOwnership()
+  }
+
+  const onKeyDown = (ev: KeyboardEvent) => {
     if (!isTouchPrimary) return
 
-    // Snapshot and clear tracked deletion at the top; only the
-    // deleteContentBackward branch may re-set it below.
-    const deletion = trackedDeletion
-    trackedDeletion = null
+    if (ev.keyCode === 229 || ev.isComposing) activateStreaming()
+    if (!streamingIme) return
 
-    // Android autocorrect: the keyboard splits word corrections into
-    // deleteContentBackward (non-collapsed) + insertText (collapsed).
-    // Track the deletion so we can combine it with the following insert.
-    if (ev.inputType === 'deleteContentBackward') {
-      const start = textarea.selectionStart ?? 0
-      const end = textarea.selectionEnd ?? start
-      // Non-collapsed: potential Android autocorrect start. Track it.
-      // Collapsed: normal backspace. Leave trackedDeletion null (already cleared).
-      if (start < end) {
-        trackedDeletion = { preDeleteValue: textarea.value, deleteStart: start, deleteEnd: end }
-      }
+    if (ev.key === 'Enter' || ev.keyCode === 13) {
+      // Do not execute the command yet: Samsung may still deliver the final
+      // composition input after keydown. beforeinput, input, or keyup commits
+      // Enter after that final edit has had a chance to arrive.
+      ev.stopPropagation()
+      enterKeyPending = true
       return
     }
 
-    if (ev.inputType !== 'insertText' && ev.inputType !== 'insertReplacementText') return
+    // Let terminal shortcuts and navigation remain xterm-owned. Text/editing
+    // keys must reach the textarea default action but not xterm's key handler,
+    // otherwise keydown and input would both send the same transition.
+    if (ev.ctrlKey || ev.altKey || ev.metaKey) {
+      resetOwnership()
+      return
+    }
+    const isTextOrEdit = ev.keyCode === 229
+      || ev.isComposing
+      || ev.key.length === 1
+      || ev.key === 'Backspace'
+      || ev.key === 'Delete'
+    if (isTextOrEdit) {
+      ev.stopPropagation()
+    } else {
+      // Navigation and command keys move terminal state independently of the
+      // textarea model. Hand ownership back to xterm before they run.
+      resetOwnership()
+    }
+  }
 
+  const onKeyPress = (ev: KeyboardEvent) => {
+    if (!isTouchPrimary || !streamingIme) return
+    if (!ev.ctrlKey && !ev.altKey && !ev.metaKey) ev.stopPropagation()
+  }
+
+  const onKeyUp = (ev: KeyboardEvent) => {
+    if (!isTouchPrimary || !streamingIme) return
+    if ((ev.key === 'Enter' || ev.keyCode === 13) && enterKeyPending) {
+      ev.stopPropagation()
+      beginLineBreak(ev)
+      return
+    }
+    if (ev.keyCode === 229 || ev.isComposing) ev.stopPropagation()
+  }
+
+  const onCompositionStart = (ev: CompositionEvent) => {
+    if (!isTouchPrimary) return
+    activateStreaming()
+    ev.stopPropagation()
+  }
+
+  const onCompositionEvent = (ev: CompositionEvent) => {
+    if (!isTouchPrimary || !streamingIme) return
+    ev.stopPropagation()
+  }
+
+  const onBeforeInput = (ev: InputEvent) => {
+    if (!isTouchPrimary) return
+    if (ev.isComposing) activateStreaming()
+
+    if (streamingIme) {
+      ev.stopPropagation()
+      if (ev.inputType === 'insertLineBreak' || ev.inputType === 'insertParagraph') {
+        beginLineBreak(ev)
+        return
+      }
+      stageSnapshot(ev.inputType)
+      return
+    }
+
+    // iOS may replace a selected word without exposing composition/keyCode229.
     const start = textarea.selectionStart ?? 0
     const end = textarea.selectionEnd ?? start
+    if ((ev.inputType === 'insertText' || ev.inputType === 'insertReplacementText') && start < end) {
+      stageSnapshot(ev.inputType)
+    }
+  }
 
-    // Android autocorrect phase 2: insertText immediately after a tracked
-    // deletion completes the replacement pair.
-    if (deletion && start === end) {
-      const newText = resolveText(ev)
-      if (newText) queueReplacement(
-        deletion.preDeleteValue, deletion.deleteStart, deletion.deleteEnd,
-        newText, deletion.preDeleteValue,
-      )
+  const onInput = (ev: Event) => {
+    if (ev.target !== textarea || !isTouchPrimary) return
+    const input = ev as InputEvent
+
+    if (input.isComposing && !streamingIme) {
+      // Last-resort activation when compositionstart, keydown 229 and
+      // beforeinput were all omitted. input.data describes the first append;
+      // reconstruct its pre-edit baseline so that first text is not lost.
+      const newValue = textarea.value
+      const data = input.data ?? ''
+      const baseline = snapshot?.value
+        ?? (data && newValue.endsWith(data) ? newValue.slice(0, -data.length) : '')
+      streamingIme = true
+      shadowValue = baseline
+    }
+
+    if (streamingIme) {
+      ev.stopPropagation()
+      if (input.inputType === 'insertLineBreak' || input.inputType === 'insertParagraph') {
+        beginLineBreak(ev)
+        return
+      }
+      if (lineBreakHandled) {
+        textarea.value = ''
+        textarea.selectionStart = textarea.selectionEnd = 0
+        shadowValue = ''
+        clearSnapshot()
+        return
+      }
+
+      const staged = snapshot
+      clearSnapshot()
+      const oldValue = staged && staged.inputType === input.inputType && staged.value === shadowValue
+        ? staged.value
+        : shadowValue
+      const newValue = textarea.value
+      const payload = diffTextareaValues(oldValue, newValue)
+      shadowValue = newValue
+      if (payload) send(payload)
       return
     }
 
-    // Collapsed selection = normal append, let xterm handle it.
-    if (start === end) return
-
-    // iOS / single-event replacement: insertText or insertReplacementText
-    // with non-collapsed selection.
-    const newText = resolveText(ev)
-    if (newText) queueReplacement(textarea.value, start, end, newText)
+    if (!snapshot) return
+    const staged = snapshot
+    clearSnapshot()
+    if (staged.inputType !== input.inputType) return
+    ev.stopPropagation()
+    const payload = diffTextareaValues(staged.value, textarea.value)
+    if (payload) send(payload)
   }
 
-  // Phase 2: intercept the input event before xterm, send replacement + suffix.
-  // Registered on the container (parent) so capture phase fires before
-  // xterm's capture-phase handler on the textarea itself.
-  const onInput = (ev: Event) => {
-    if (!pending) return
-    const { newText, suffix, resetValue } = pending
-    pending = null
+  const onBlur = () => resetOwnership()
 
-    // Prevent xterm's _inputEvent from also sending ev.data.
-    ev.stopImmediatePropagation()
-
-    send(newText + suffix)
-
-    // Android: reset textarea to the pre-autocorrect value. xterm's
-    // CompositionHelper._handleAnyTextareaChanges (triggered by keydown 229)
-    // captured this same value as oldValue and will diff against it in a
-    // deferred setTimeout(0). By restoring it, the diff sees no change.
-    if (resetValue !== undefined) {
-      textarea.value = resetValue
-      textarea.selectionStart = textarea.selectionEnd = resetValue.length
-    }
-  }
-
-  textarea.addEventListener('beforeinput', onBeforeInput, { capture: true })
+  pointerQuery.addEventListener('change', onPointerChange)
+  container.addEventListener('keydown', onKeyDown, { capture: true })
+  container.addEventListener('keypress', onKeyPress, { capture: true })
+  container.addEventListener('keyup', onKeyUp, { capture: true })
+  container.addEventListener('compositionstart', onCompositionStart, { capture: true })
+  container.addEventListener('compositionupdate', onCompositionEvent, { capture: true })
+  container.addEventListener('compositionend', onCompositionEvent, { capture: true })
+  container.addEventListener('beforeinput', onBeforeInput, { capture: true })
   container.addEventListener('input', onInput, { capture: true })
+  textarea.addEventListener('blur', onBlur)
 
   return () => {
+    resetOwnership()
     pointerQuery.removeEventListener('change', onPointerChange)
-    textarea.removeEventListener('beforeinput', onBeforeInput, { capture: true })
+    container.removeEventListener('keydown', onKeyDown, { capture: true })
+    container.removeEventListener('keypress', onKeyPress, { capture: true })
+    container.removeEventListener('keyup', onKeyUp, { capture: true })
+    container.removeEventListener('compositionstart', onCompositionStart, { capture: true })
+    container.removeEventListener('compositionupdate', onCompositionEvent, { capture: true })
+    container.removeEventListener('compositionend', onCompositionEvent, { capture: true })
+    container.removeEventListener('beforeinput', onBeforeInput, { capture: true })
     container.removeEventListener('input', onInput, { capture: true })
+    textarea.removeEventListener('blur', onBlur)
   }
 }
