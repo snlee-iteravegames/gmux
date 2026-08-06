@@ -1,517 +1,368 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { attachMobileInputHandler } from './mobile-input'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { attachMobileInputHandler, diffTextareaValues } from './mobile-input'
 
-// Mock window.matchMedia to simulate a touch-primary device.
-// The handler guards on (pointer: coarse) and is a no-op on desktop.
-const matchMediaMock = vi.fn().mockImplementation((query: string) => ({
-  matches: query === '(pointer: coarse)',
-  media: query,
-  addEventListener: vi.fn(),
-  removeEventListener: vi.fn(),
-  addListener: vi.fn(),
-  removeListener: vi.fn(),
-  onchange: null,
-  dispatchEvent: vi.fn(),
-}))
+type Listener = (ev: any) => void
 
-// Vitest runs in Node (no DOM); provide minimal window stub.
-if (typeof globalThis.window === 'undefined') {
-  (globalThis as any).window = globalThis
-}
-Object.defineProperty(window, 'matchMedia', { value: matchMediaMock, writable: true, configurable: true })
-
-// ── Test helpers ──
-
-/** Minimal fake textarea. */
-function createFakeTextarea() {
-  let value = ''
-  let selectionStart = 0
-  let selectionEnd = 0
-  const listeners = new Map<string, Set<EventListener>>()
-
+function fakeTarget() {
+  const listeners = new Map<string, Set<Listener>>()
   return {
-    get value() { return value },
-    set value(v: string) { value = v },
-    get selectionStart() { return selectionStart },
-    set selectionStart(v: number) { selectionStart = v },
-    get selectionEnd() { return selectionEnd },
-    set selectionEnd(v: number) { selectionEnd = v },
-    addEventListener(type: string, fn: EventListener, _opts?: any) {
+    value: '',
+    selectionStart: 0,
+    selectionEnd: 0,
+    addEventListener(type: string, fn: Listener) {
       if (!listeners.has(type)) listeners.set(type, new Set())
       listeners.get(type)!.add(fn)
     },
-    removeEventListener(type: string, fn: EventListener, _opts?: any) {
+    removeEventListener(type: string, fn: Listener) {
       listeners.get(type)?.delete(fn)
     },
-    dispatch(type: string, props: Record<string, any> = {}) {
+    dispatch(type: string, props: Record<string, unknown> = {}) {
+      let stopped = false
       let defaultPrevented = false
-      let immediateStopped = false
-      const event = {
+      const ev = {
         type,
+        target: this,
+        cancelable: true,
+        key: '',
+        keyCode: 0,
+        inputType: '',
+        data: null,
+        isComposing: false,
+        ctrlKey: false,
+        altKey: false,
+        metaKey: false,
+        stopPropagation() { stopped = true },
+        stopImmediatePropagation() { stopped = true },
+        preventDefault() { if (this.cancelable) defaultPrevented = true },
         ...props,
-        preventDefault() { defaultPrevented = true },
-        stopImmediatePropagation() { immediateStopped = true },
       }
-      for (const fn of listeners.get(type) ?? []) {
-        if (immediateStopped) break
-        fn(event as any)
-      }
-      return { defaultPrevented, immediateStopped }
+      for (const fn of listeners.get(type) ?? []) fn(ev)
+      return { stopped, defaultPrevented }
     },
   }
 }
 
-function createFakeContainer() {
-  const listeners = new Map<string, Set<EventListener>>()
-  return {
-    addEventListener(type: string, fn: EventListener, _opts?: any) {
-      if (!listeners.has(type)) listeners.set(type, new Set())
-      listeners.get(type)!.add(fn)
-    },
-    removeEventListener(type: string, fn: EventListener, _opts?: any) {
-      listeners.get(type)?.delete(fn)
-    },
-    dispatch(type: string, props: Record<string, any> = {}) {
-      let immediateStopped = false
-      const event = {
-        type,
-        ...props,
-        stopImmediatePropagation() { immediateStopped = true },
-      }
-      for (const fn of listeners.get(type) ?? []) {
-        if (immediateStopped) break
-        fn(event as any)
-      }
-      return { immediateStopped }
-    },
+class FakeMediaQuery {
+  matches = true
+  private listeners = new Set<() => void>()
+  addEventListener(_type: string, fn: () => void) { this.listeners.add(fn) }
+  removeEventListener(_type: string, fn: () => void) { this.listeners.delete(fn) }
+  set(value: boolean) {
+    this.matches = value
+    for (const fn of this.listeners) fn()
   }
 }
 
-/**
- * Simulate the browser event flow for an input event:
- * 1. beforeinput fires on textarea
- * 2. browser applies the change to textarea.value
- * 3. input fires on container (capture, parent-first) then textarea
- *
- * Returns whether the container stopped propagation (meaning xterm's
- * handler on the textarea would NOT have fired).
- */
-function simulateInput(
-  textarea: ReturnType<typeof createFakeTextarea>,
-  container: ReturnType<typeof createFakeContainer>,
-  inputType: string,
-  data: string,
-  dataTransfer?: any,
-): { stoppedBeforeXterm: boolean } {
-  // Phase 1: beforeinput on textarea
-  textarea.dispatch('beforeinput', { inputType, data, dataTransfer: dataTransfer ?? null })
-
-  // Browser applies the change
-  const start = textarea.selectionStart
-  const end = textarea.selectionEnd
-  if (data) {
-    textarea.value = textarea.value.substring(0, start) + data + textarea.value.substring(end)
-    textarea.selectionStart = textarea.selectionEnd = start + data.length
-  }
-
-  // Phase 2: input propagates container (capture) → textarea
-  const { immediateStopped } = container.dispatch('input', { inputType, data })
-  if (!immediateStopped) {
-    textarea.dispatch('input', { inputType, data })
-  }
-
-  return { stoppedBeforeXterm: immediateStopped }
-}
-
-/**
- * Simulate Android autocorrect: deleteContentBackward with non-collapsed
- * selection, immediately followed by insertText with collapsed selection.
- *
- * Returns whether the insertText's input event was stopped before xterm.
- */
-function simulateAndroidAutocorrect(
-  textarea: ReturnType<typeof createFakeTextarea>,
-  container: ReturnType<typeof createFakeContainer>,
-  data: string,
-): { stoppedBeforeXterm: boolean } {
-  // Phase 1a: beforeinput deleteContentBackward
-  textarea.dispatch('beforeinput', {
-    inputType: 'deleteContentBackward',
-    data: null,
-    dataTransfer: null,
+describe('diffTextareaValues', () => {
+  it.each([
+    ['', 'ㅎ', 'ㅎ'],
+    ['ㅎ', '하', '\x7f하'],
+    ['한글', '한', '\x7f'],
+    ['wrld', 'world', '\x7f'.repeat(3) + 'orld'],
+    ['the teh quick', 'the the quick', '\x7f'.repeat(8) + 'he quick'],
+    ['😀', '', '\x7f'],
+    ['a😀한', 'a', '\x7f\x7f'],
+  ])('transforms %j into %j', (oldValue, newValue, expected) => {
+    expect(diffTextareaValues(oldValue, newValue)).toBe(expected)
   })
-
-  // Browser applies the deletion
-  const delStart = textarea.selectionStart
-  const delEnd = textarea.selectionEnd
-  textarea.value = textarea.value.substring(0, delStart) + textarea.value.substring(delEnd)
-  textarea.selectionStart = textarea.selectionEnd = delStart
-
-  // Phase 1b: input deleteContentBackward (container capture → textarea)
-  const delResult = container.dispatch('input', { inputType: 'deleteContentBackward', data: null })
-  if (!delResult.immediateStopped) {
-    textarea.dispatch('input', { inputType: 'deleteContentBackward', data: null })
-  }
-
-  // Phase 2: the insertText half
-  return simulateInput(textarea, container, 'insertText', data)
-}
-
-// ── Tests ──
+})
 
 describe('attachMobileInputHandler', () => {
-  let textarea: ReturnType<typeof createFakeTextarea>
-  let container: ReturnType<typeof createFakeContainer>
-  let sent: string
-  let send: (data: string) => void
+  let textarea: ReturnType<typeof fakeTarget>
+  let container: ReturnType<typeof fakeTarget>
+  let media: FakeMediaQuery
+  let sent: string[]
   let dispose: () => void
 
+  const activateWithComposition = () => container.dispatch('compositionstart', {
+    target: textarea,
+    data: '',
+  })
+
+  const activateWith229 = (key = 'Unidentified') => container.dispatch('keydown', {
+    target: textarea,
+    key,
+    keyCode: 229,
+  })
+
+  const editTo = (
+    inputType: string,
+    newValue: string,
+    options: { data?: string | null; composing?: boolean } = {},
+  ) => {
+    const data = options.data ?? null
+    const isComposing = options.composing ?? false
+    const before = container.dispatch('beforeinput', {
+      target: textarea,
+      inputType,
+      data,
+      isComposing,
+    })
+    if (!before.defaultPrevented) {
+      textarea.value = newValue
+      textarea.selectionStart = textarea.selectionEnd = newValue.length
+    }
+    const input = container.dispatch('input', {
+      target: textarea,
+      inputType,
+      data,
+      isComposing,
+    })
+    return { before, input }
+  }
+
   beforeEach(() => {
-    textarea = createFakeTextarea()
-    container = createFakeContainer()
-    sent = ''
-    send = (data) => { sent += data }
+    textarea = fakeTarget()
+    container = fakeTarget()
+    media = new FakeMediaQuery()
+    sent = []
+    vi.stubGlobal('window', { matchMedia: () => media })
     dispose = attachMobileInputHandler(
       { textarea } as any,
       container as any,
-      send,
+      data => sent.push(data),
     )
   })
 
   afterEach(() => {
     dispose()
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
   })
 
-  // ── Normal typing (must not interfere) ──
-
-  it('lets normal character appends propagate to xterm', () => {
-    textarea.value = 'hel'
-    textarea.selectionStart = 3
-    textarea.selectionEnd = 3
-
-    const { stoppedBeforeXterm } = simulateInput(textarea, container, 'insertText', 'l')
-
-    expect(sent).toBe('')
-    expect(stoppedBeforeXterm).toBe(false) // xterm's handler must fire
+  it('leaves ordinary input passive before an IME signal', () => {
+    const result = editTo('insertText', 'a', { data: 'a' })
+    expect(result.input.stopped).toBe(false)
+    expect(sent).toEqual([])
   })
 
-  // ── iOS dictation (insertText with selection) ──
-
-  it('replays the exact iOS Safari dictation trace', () => {
-    // Trace from real iPhone (iOS 18.6, Safari 604.1):
-    //   beforeinput insertText data="t"              selStart=0 selEnd=0   textarea=""
-    //   beforeinput insertText data="test"           selStart=0 selEnd=1   textarea="t"
-    //   beforeinput insertText data="testing test"   selStart=0 selEnd=4   textarea="test"
-    //   beforeinput insertText data="testing testing" selStart=0 selEnd=12 textarea="testing test"
-
-    // Step 1: "t" — plain append
-    textarea.value = ''
-    textarea.selectionStart = 0
-    textarea.selectionEnd = 0
-    let r = simulateInput(textarea, container, 'insertText', 't')
-    expect(r.stoppedBeforeXterm).toBe(false)
-    expect(sent).toBe('')
-
-    // Step 2: replace "t" with "test"
-    textarea.selectionStart = 0
-    textarea.selectionEnd = 1
-    r = simulateInput(textarea, container, 'insertText', 'test')
-    expect(r.stoppedBeforeXterm).toBe(true)
-    expect(sent).toBe('\x7f' + 'test')
-    expect(textarea.value).toBe('test')
-
-    sent = ''
-
-    // Step 3: replace "test" with "testing test"
-    textarea.selectionStart = 0
-    textarea.selectionEnd = 4
-    r = simulateInput(textarea, container, 'insertText', 'testing test')
-    expect(r.stoppedBeforeXterm).toBe(true)
-    expect(sent).toBe('\x7f'.repeat(4) + 'testing test')
-    expect(textarea.value).toBe('testing test')
-
-    sent = ''
-
-    // Step 4: replace "testing test" with "testing testing"
-    textarea.selectionStart = 0
-    textarea.selectionEnd = 12
-    r = simulateInput(textarea, container, 'insertText', 'testing testing')
-    expect(r.stoppedBeforeXterm).toBe(true)
-    expect(sent).toBe('\x7f'.repeat(12) + 'testing testing')
-    expect(textarea.value).toBe('testing testing')
-  })
-
-  // ── Autocorrect (insertReplacementText) ──
-
-  it('handles autocorrect with suffix after selection', () => {
-    // "helo " → replace "helo" with "hello", space preserved
-    textarea.value = 'helo '
-    textarea.selectionStart = 0
-    textarea.selectionEnd = 4
-
-    simulateInput(textarea, container, 'insertReplacementText', 'hello')
-
-    // 5 backspaces (erase "helo ") + "hello" + " " (suffix)
-    expect(sent).toBe('\x7f'.repeat(5) + 'hello ')
-  })
-
-  it('handles autocorrect in the middle of a line', () => {
-    // "the teh quick" → replace "teh" (positions 4-7) with "the"
-    textarea.value = 'the teh quick'
-    textarea.selectionStart = 4
-    textarea.selectionEnd = 7
-
-    simulateInput(textarea, container, 'insertReplacementText', 'the')
-
-    // 9 backspaces (erase "teh quick") + "the" + " quick"
-    expect(sent).toBe('\x7f'.repeat(9) + 'the quick')
-    expect(textarea.value).toBe('the the quick')
-  })
-
-  it('handles autocorrect at end of input', () => {
+  it('handles a compositionless selected replacement on mobile', () => {
     textarea.value = 'wrld'
     textarea.selectionStart = 0
     textarea.selectionEnd = 4
-
-    simulateInput(textarea, container, 'insertReplacementText', 'world')
-
-    expect(sent).toBe('\x7f'.repeat(4) + 'world')
+    const result = editTo('insertReplacementText', 'world', { data: 'world' })
+    expect(result.input.stopped).toBe(true)
+    expect(sent).toEqual(['\x7f'.repeat(3) + 'orld'])
   })
 
-  // ── dataTransfer fallback (Safari spell-check) ──
+  it('blocks xterm composition events and streams Korean transitions', () => {
+    expect(activateWithComposition().stopped).toBe(true)
+    expect(container.dispatch('compositionupdate', { target: textarea, data: 'ㅎ' }).stopped).toBe(true)
 
-  it('reads replacement text from dataTransfer when data is null', () => {
-    textarea.value = 'tset'
-    textarea.selectionStart = 0
-    textarea.selectionEnd = 4
+    editTo('insertCompositionText', 'ㅎ', { data: 'ㅎ', composing: true })
+    editTo('insertCompositionText', '하', { data: '하', composing: true })
+    editTo('insertCompositionText', '한', { data: '한', composing: true })
 
-    const transfer = { getData: (t: string) => t === 'text/plain' ? 'test' : '' }
-    // Pass null as data to exercise the fallback path
-    textarea.dispatch('beforeinput', {
-      inputType: 'insertReplacementText',
-      data: null,
-      dataTransfer: transfer,
-    })
-    // Manually apply the change (browser would do this)
-    textarea.value = 'test'
-    textarea.selectionStart = textarea.selectionEnd = 4
-    container.dispatch('input', { inputType: 'insertReplacementText', data: null })
-
-    expect(sent).toBe('\x7f'.repeat(4) + 'test')
+    expect(sent).toEqual(['ㅎ', '\x7f하', '\x7f한'])
+    expect(container.dispatch('compositionend', { target: textarea, data: '한' }).stopped).toBe(true)
+    expect(sent).toHaveLength(3)
   })
 
-  // ── Android autocorrect (deleteContentBackward + insertText) ──
-
-  it('handles Android autocorrect at end of line', () => {
-    // Trace from real Android device (Chrome 146, GBoard):
-    // User typed "lets", keyboard corrects to "let's "
-    //   deleteContentBackward selStart=36 selEnd=37 (deletes "s")
-    //   insertText data="'s " selStart=36 selEnd=36
-    textarea.value = 'hello , let\'s autocorrect thists lets'
-    textarea.selectionStart = 36
-    textarea.selectionEnd = 37
-
-    const { stoppedBeforeXterm } = simulateAndroidAutocorrect(textarea, container, "'s ")
-
-    expect(stoppedBeforeXterm).toBe(true)
-    // 1 backspace (erase from deleteStart=36 to end=37) + replacement + no suffix
-    expect(sent).toBe('\x7f' + "'s ")
-    // Textarea reset to pre-autocorrect value to neutralize _handleAnyTextareaChanges
-    expect(textarea.value).toBe('hello , let\'s autocorrect thists lets')
+  it('sends Space immediately after composition without a second commit', () => {
+    activateWithComposition()
+    editTo('insertCompositionText', '한', { data: '한', composing: true })
+    container.dispatch('compositionend', { target: textarea, data: '한' })
+    editTo('insertText', '한 ', { data: ' ' })
+    expect(sent).toEqual(['한', ' '])
   })
 
-  it('handles Android autocorrect in the middle of text', () => {
-    // "helo world" → correct "helo" to "hello"
-    // delete "lo" (positions 2-4), insert "llo"
+  it('sends exactly one DEL per removed Korean codepoint', () => {
+    textarea.value = '가나다'
+    textarea.selectionStart = textarea.selectionEnd = 3
+    activateWith229('Backspace')
+    editTo('deleteContentBackward', '가나')
+    editTo('deleteContentBackward', '가')
+    editTo('deleteContentBackward', '')
+    expect(sent).toEqual(['\x7f', '\x7f', '\x7f'])
+  })
+
+  it('blocks keyCode 229 so xterm cannot schedule its deferred diff', () => {
+    const result = activateWith229()
+    expect(result.stopped).toBe(true)
+    editTo('insertText', '안', { data: '안' })
+    expect(sent).toEqual(['안'])
+  })
+
+  it('applies Android delete and insert autocorrect as two exact transitions', () => {
     textarea.value = 'helo world'
-    textarea.selectionStart = 2
-    textarea.selectionEnd = 4
+    textarea.selectionStart = textarea.selectionEnd = textarea.value.length
+    activateWith229()
 
-    const { stoppedBeforeXterm } = simulateAndroidAutocorrect(textarea, container, 'llo')
+    editTo('deleteContentBackward', 'he world')
+    editTo('insertText', 'hello world', { data: 'llo' })
 
-    expect(stoppedBeforeXterm).toBe(true)
-    // 8 backspaces (erase from deleteStart=2 to end=10: "lo world")
-    // then replacement "llo" + suffix " world"
-    expect(sent).toBe('\x7f'.repeat(8) + 'llo world')
-    // Textarea reset to pre-autocorrect value
-    expect(textarea.value).toBe('helo world')
+    expect(sent).toEqual([
+      '\x7f'.repeat(8) + ' world',
+      '\x7f'.repeat(6) + 'llo world',
+    ])
+    expect(textarea.value).toBe('hello world')
   })
 
-  it('does not treat collapsed backspace + typing as autocorrect', () => {
-    // Non-collapsed delete sets tracking
-    textarea.value = 'hello world'
-    textarea.selectionStart = 5
-    textarea.selectionEnd = 8
-    textarea.dispatch('beforeinput', {
-      inputType: 'deleteContentBackward',
-      data: null,
-      dataTransfer: null,
-    })
-
-    // Collapsed delete (normal backspace) should clear the stale tracking
-    textarea.value = 'helloorld'
-    textarea.selectionStart = 5
-    textarea.selectionEnd = 5
-    textarea.dispatch('beforeinput', {
-      inputType: 'deleteContentBackward',
-      data: null,
-      dataTransfer: null,
-    })
-
-    // This insertText should pass through as a normal append, not autocorrect
-    textarea.value = 'hellorld'
-    textarea.selectionStart = 4
-    textarea.selectionEnd = 4
-
-    const { stoppedBeforeXterm } = simulateInput(textarea, container, 'insertText', 'o')
-
-    expect(sent).toBe('')
-    expect(stoppedBeforeXterm).toBe(false)
-  })
-
-  it('clears tracked deletion when a non-text event intervenes', () => {
-    textarea.value = 'hello'
-    textarea.selectionStart = 3
-    textarea.selectionEnd = 5
-
-    // deleteContentBackward with non-collapsed selection
-    textarea.dispatch('beforeinput', {
-      inputType: 'deleteContentBackward',
-      data: null,
-      dataTransfer: null,
-    })
-
-    // An unrelated event type intervenes, clearing the tracked deletion
-    textarea.dispatch('beforeinput', {
+  it('does not lose the first composing input when all earlier IME signals are missing', () => {
+    textarea.value = '한'
+    textarea.selectionStart = textarea.selectionEnd = 1
+    const result = container.dispatch('input', {
+      target: textarea,
       inputType: 'insertCompositionText',
-      data: null,
-      dataTransfer: null,
+      data: '한',
+      isComposing: true,
     })
-
-    // The following insertText should be treated as a normal append
-    textarea.value = 'hel'
-    textarea.selectionStart = 3
-    textarea.selectionEnd = 3
-
-    const { stoppedBeforeXterm } = simulateInput(textarea, container, 'insertText', 'p')
-
-    expect(sent).toBe('')
-    expect(stoppedBeforeXterm).toBe(false)
+    expect(result.stopped).toBe(true)
+    expect(sent).toEqual(['한'])
   })
 
-  it('handles successive Android autocorrects independently', () => {
-    // First autocorrect: "teh" → "the"
-    textarea.value = 'teh wrld'
-    textarea.selectionStart = 0
-    textarea.selectionEnd = 3
-
-    let r = simulateAndroidAutocorrect(textarea, container, 'the')
-    expect(r.stoppedBeforeXterm).toBe(true)
-    expect(sent).toBe('\x7f'.repeat(8) + 'the wrld')
-    expect(textarea.value).toBe('teh wrld') // reset
-
-    sent = ''
-
-    // Second autocorrect: "wrld" → "world" (on the reset textarea)
-    textarea.value = 'the wrld'
-    textarea.selectionStart = 4
-    textarea.selectionEnd = 8
-
-    r = simulateAndroidAutocorrect(textarea, container, 'world')
-    expect(r.stoppedBeforeXterm).toBe(true)
-    expect(sent).toBe('\x7f'.repeat(4) + 'world')
-    expect(textarea.value).toBe('the wrld') // reset
+  it('falls back to the shadow model when beforeinput is missing', () => {
+    textarea.value = '안'
+    textarea.selectionStart = textarea.selectionEnd = 1
+    activateWith229()
+    textarea.value = '안녕'
+    textarea.selectionStart = textarea.selectionEnd = 2
+    const result = container.dispatch('input', {
+      target: textarea,
+      inputType: 'insertText',
+      data: '녕',
+    })
+    expect(result.stopped).toBe(true)
+    expect(sent).toEqual(['녕'])
   })
 
-  // ── Edge cases ──
-
-  it('ignores replacement with empty text', () => {
-    textarea.value = 'hello'
-    textarea.selectionStart = 0
-    textarea.selectionEnd = 5
-
-    const { stoppedBeforeXterm } = simulateInput(textarea, container, 'insertText', '')
-
-    expect(sent).toBe('')
-    expect(stoppedBeforeXterm).toBe(false)
+  it('expires a stale beforeinput snapshot and still aggregates from shadow', () => {
+    vi.useFakeTimers()
+    textarea.value = '안'
+    textarea.selectionStart = textarea.selectionEnd = 1
+    activateWith229()
+    container.dispatch('beforeinput', {
+      target: textarea,
+      inputType: 'insertText',
+      data: '녕',
+    })
+    vi.runAllTimers()
+    textarea.value = '안녕'
+    textarea.selectionStart = textarea.selectionEnd = 2
+    container.dispatch('input', {
+      target: textarea,
+      inputType: 'insertText',
+      data: '녕',
+    })
+    expect(sent).toEqual(['녕'])
   })
 
-  it('ignores unhandled input types', () => {
-    textarea.value = 'hello'
-    textarea.selectionStart = 0
-    textarea.selectionEnd = 5
+  it('sends Enter once from keydown and suppresses a duplicate line-break input', () => {
+    vi.useFakeTimers()
+    textarea.value = '한'
+    textarea.selectionStart = textarea.selectionEnd = 1
+    activateWith229()
+    const keydown = container.dispatch('keydown', {
+      target: textarea,
+      key: 'Enter',
+      keyCode: 13,
+    })
+    expect(keydown.stopped).toBe(true)
+    expect(keydown.defaultPrevented).toBe(false)
 
-    const { stoppedBeforeXterm } = simulateInput(textarea, container, 'insertLineBreak', '')
-
-    expect(sent).toBe('')
-    expect(stoppedBeforeXterm).toBe(false)
+    editTo('insertLineBreak', '\n')
+    expect(sent).toEqual(['\r'])
+    expect(textarea.value).toBe('')
   })
 
-  // ── Lifecycle ──
+  it('flushes a final composition change before Enter on keyup fallback', () => {
+    textarea.value = '하'
+    textarea.selectionStart = textarea.selectionEnd = 1
+    activateWith229()
+    container.dispatch('keydown', {
+      target: textarea,
+      key: 'Enter',
+      keyCode: 13,
+    })
+    // Final native composition mutation and Enter's default newline arrived
+    // without their own input events.
+    textarea.value = '한\n'
+    textarea.selectionStart = textarea.selectionEnd = 2
+    container.dispatch('keyup', {
+      target: textarea,
+      key: 'Enter',
+      keyCode: 13,
+    })
+    expect(sent).toEqual(['\x7f한', '\r'])
+  })
 
-  it('cleanup removes both listeners', () => {
+  it('handles line break when no keydown event is delivered', () => {
+    textarea.value = '한'
+    textarea.selectionStart = textarea.selectionEnd = 1
+    activateWithComposition()
+    const result = container.dispatch('beforeinput', {
+      target: textarea,
+      inputType: 'insertParagraph',
+      data: null,
+    })
+    expect(result.stopped).toBe(true)
+    expect(result.defaultPrevented).toBe(true)
+    expect(sent).toEqual(['\r'])
+    expect(textarea.value).toBe('')
+  })
+
+  it('lets modified shortcuts and navigation remain xterm-owned', () => {
+    activateWith229()
+    const shortcut = container.dispatch('keydown', {
+      target: textarea,
+      key: 'c',
+      keyCode: 67,
+      ctrlKey: true,
+    })
+    const arrow = container.dispatch('keydown', {
+      target: textarea,
+      key: 'ArrowLeft',
+      keyCode: 37,
+    })
+    expect(shortcut.stopped).toBe(false)
+    expect(arrow.stopped).toBe(false)
+    expect(sent).toEqual([])
+  })
+
+  it('resets ownership on blur', () => {
+    activateWith229()
+    textarea.dispatch('blur')
+    const result = editTo('insertText', 'a', { data: 'a' })
+    expect(result.input.stopped).toBe(false)
+    expect(sent).toEqual([])
+  })
+
+  it('resets ownership when primary pointer becomes fine', () => {
+    activateWith229()
+    media.set(false)
+    const result = editTo('insertText', 'a', { data: 'a' })
+    expect(result.input.stopped).toBe(false)
+    expect(sent).toEqual([])
+  })
+
+  it('does nothing on desktop', () => {
     dispose()
-
-    textarea.value = 'test'
-    textarea.selectionStart = 0
-    textarea.selectionEnd = 4
-
-    const { stoppedBeforeXterm } = simulateInput(textarea, container, 'insertText', 'fixed')
-
-    expect(sent).toBe('')
-    expect(stoppedBeforeXterm).toBe(false)
-  })
-
-  it('returns noop when terminal has no textarea', () => {
-    const d = attachMobileInputHandler({ textarea: null } as any, container as any, send)
-    d() // should not throw
-  })
-
-  it('is a no-op on desktop (pointer: fine)', () => {
-    dispose()
-
-    // Temporarily override matchMedia to report a fine pointer (desktop).
-    matchMediaMock.mockImplementation((query: string) => ({
-      matches: false,
-      media: query,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      addListener: vi.fn(),
-      removeListener: vi.fn(),
-      onchange: null,
-      dispatchEvent: vi.fn(),
-    }))
-
-    const desktopSent: string[] = []
-    const desktopDispose = attachMobileInputHandler(
+    media.matches = false
+    sent = []
+    dispose = attachMobileInputHandler(
       { textarea } as any,
       container as any,
-      (data) => { desktopSent.push(data) },
+      data => sent.push(data),
     )
+    expect(activateWithComposition().stopped).toBe(false)
+    const result = editTo('insertReplacementText', 'desktop', { data: 'desktop' })
+    expect(result.input.stopped).toBe(false)
+    expect(sent).toEqual([])
+  })
 
-    // Set up a non-collapsed selection (xterm internal state on desktop)
-    textarea.value = 'old content from previous input'
-    textarea.selectionStart = 0
-    textarea.selectionEnd = 30
+  it('removes every listener on cleanup', () => {
+    dispose()
+    dispose = () => {}
+    expect(activateWith229().stopped).toBe(false)
+    expect(activateWithComposition().stopped).toBe(false)
+    const result = editTo('insertText', 'a', { data: 'a', composing: true })
+    expect(result.input.stopped).toBe(false)
+    expect(sent).toEqual([])
+  })
 
-    // Insert text with non-collapsed selection: on mobile this would
-    // trigger the iOS replacement path, on desktop it must be ignored.
-    simulateInput(textarea, container, 'insertText', ' ')
-
-    expect(desktopSent).toEqual([])
-
-    desktopDispose()
-
-    // Restore touch mock for other tests.
-    matchMediaMock.mockImplementation((query: string) => ({
-      matches: query === '(pointer: coarse)',
-      media: query,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      addListener: vi.fn(),
-      removeListener: vi.fn(),
-      onchange: null,
-      dispatchEvent: vi.fn(),
-    }))
+  it('returns a noop without a textarea', () => {
+    dispose()
+    dispose = attachMobileInputHandler({ textarea: undefined } as any, container as any, vi.fn())
+    expect(() => dispose()).not.toThrow()
   })
 })
