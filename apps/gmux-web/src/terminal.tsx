@@ -290,16 +290,19 @@ export function TerminalView({
     setPreviewTarget(null)
   }, [session.id])
 
-  const queueResize = useCallback((size: TerminalSize) => {
-    termIoRef.current?.requestResize(size, termEpochRef.current)
+  // Async producers must pass the ownership epoch they were created under.
+  // Reading termEpochRef here would let a late callback from session A relabel
+  // its data as session B after a switch.
+  const queueResize = useCallback((size: TerminalSize, epoch: number) => {
+    termIoRef.current?.requestResize(size, epoch)
   }, [])
 
-  const queueData = useCallback((data: Uint8Array, onWritten?: () => void) => {
-    termIoRef.current?.enqueue(data, termEpochRef.current, onWritten)
+  const queueData = useCallback((data: Uint8Array, epoch: number, onWritten?: () => void) => {
+    termIoRef.current?.enqueue(data, epoch, onWritten)
   }, [])
 
-  const queueMany = useCallback((chunks: Uint8Array[], onWritten?: () => void) => {
-    termIoRef.current?.enqueueMany(chunks, termEpochRef.current, onWritten)
+  const queueMany = useCallback((chunks: Uint8Array[], epoch: number, onWritten?: () => void) => {
+    termIoRef.current?.enqueueMany(chunks, epoch, onWritten)
   }, [])
 
   const resetResizeEchoGate = useCallback(() => {
@@ -330,7 +333,7 @@ export function TerminalView({
     // server echoes the resize back. Without this, ptySize would lag behind
     // viewportSize for one round-trip, causing a spurious pill flash.
     setPtySize(size); ptySizeRef.current = size
-    queueResize(size)
+    queueResize(size, termEpochRef.current)
 
     if (sameSize(prevPty, size)) return
 
@@ -384,7 +387,7 @@ export function TerminalView({
 
     if (decision.kind === 'follow') {
       // Out of sync (pill visible), keep xterm at the PTY size.
-      queueResize(decision.size)
+      queueResize(decision.size, termEpochRef.current)
     }
   }, [applyOwnedResize, queueResize])
 
@@ -505,7 +508,7 @@ export function TerminalView({
     const initialVp = shellRef.current ? measureTerminalFit(term, shellRef.current) : getProposedTerminalSize(fitAddon)
     setViewportSize(initialVp); viewportSizeRef.current = initialVp
     termRef.current = term
-    termIoRef.current = createTerminalIO(term, {
+    const termIo = createTerminalIO(term, {
       getState() {
         const buf = term.buffer.active
         return { viewportY: buf.viewportY, baseY: buf.baseY, rows: term.rows }
@@ -524,6 +527,7 @@ export function TerminalView({
         return text
       },
     })
+    termIoRef.current = termIo
     ;(window as any).__gmuxTerm = term
     // Test-only inject hook: pumps bytes through the same path as ws.onmessage
     // (createTerminalIO.enqueue) bypassing the WebSocket and replay buffer.
@@ -803,6 +807,11 @@ export function TerminalView({
       if (resizeFrame !== null) cancelAnimationFrame(resizeFrame)
       longPress.cancel()
       disposed.current = true
+      // Invalidate accepted write callbacks before disposing xterm. Effect
+      // cleanup ordering must not leave a callback free to read the disposed
+      // buffer through the scroll accessor.
+      termEpochRef.current++
+      termIo.reset(termEpochRef.current)
       window.removeEventListener('keydown', handleGlobalKeydown, true)
       window.removeEventListener('resize', onViewportResize)
       if (vv) vv.removeEventListener('resize', onViewportResize)
@@ -844,16 +853,13 @@ export function TerminalView({
     let isFirstConnect = true
     let attempt = 0
     let intentionalClose = false
-    const epoch = termEpochRef.current + 1
-    termEpochRef.current = epoch
-    termIoRef.current.reset(epoch)
-
-    // Full RIS on the xterm instance so SGR colors, modes, cursor state, and
-    // scroll regions from the previous session don't bleed into the next one.
-    // Without this, switching away from a colorful TUI (btop, htop) leaves
-    // its trailing bg/fg attributes active until the new session emits an SGR
-    // of its own, painting plain-text output in btop's last color.
-    termRef.current.reset()
+    let connectCount = 0
+    let activeEpoch = termEpochRef.current + 1
+    termEpochRef.current = activeEpoch
+    // Full RIS must be serialized behind any write xterm already accepted
+    // for the previous session. term.write cannot be cancelled; resetting
+    // immediately would let its late parser callback mutate the new screen.
+    termIoRef.current.reset(activeEpoch, () => termRef.current?.reset())
 
     // Reset sizes so stale values from a previous session can't trigger a
     // spurious pill while the loading overlay is visible (before ws.onopen).
@@ -864,8 +870,26 @@ export function TerminalView({
 
     setTermLoading(true)
 
+    const ownsEffect = () => !disposed.current
+      && !intentionalClose
+      && termEpochRef.current === activeEpoch
+      && currentSessionId.current === session.id
+
     function connect() {
-      if (disposed.current) return
+      // A reconnect timer can race with effect cleanup/session navigation.
+      // Never let an obsolete effect close or replace the current socket.
+      if (!ownsEffect()) return
+
+      // Reconnects are new producer generations even though the session is
+      // unchanged. Drop queued output/scroll state from the retired socket;
+      // an accepted xterm write may finish before the authoritative replay.
+      if (connectCount > 0) {
+        activeEpoch++
+        termEpochRef.current = activeEpoch
+        termIoRef.current?.reset(activeEpoch)
+      }
+      connectCount++
+      const connectionEpoch = activeEpoch
 
       if (wsRef.current) {
         wsRef.current.close()
@@ -880,19 +904,32 @@ export function TerminalView({
       // regardless of the stale scroll state.
       termIoRef.current?.forceNextScrollToBottom()
 
-      const replay = createReplayBuffer((chunks) => {
-        queueMany(chunks, () => {
-          termRef.current?.scrollToBottom()
-          setTermLoading(false)
-        })
-      })
-
       const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
       const ws = new WebSocket(`${wsProtocol}//${location.host}/ws/${session.id}`)
       ws.binaryType = 'arraybuffer'
       wsRef.current = ws
 
+      // Session/epoch distinguish navigation and reconnect generations;
+      // socket identity also retires an individual connection immediately.
+      const ownsEpoch = () => ownsEffect() && termEpochRef.current === connectionEpoch
+      const ownsConnection = () => ownsEpoch() && wsRef.current === ws
+      const finishLoading = () => {
+        // A write accepted before close can complete during backoff. Starting
+        // the next connection invalidates it by advancing the epoch.
+        if (ownsEpoch()) setTermLoading(false)
+      }
+
+      const replay = createReplayBuffer((chunks) => {
+        if (!ownsConnection()) return
+        queueMany(chunks, connectionEpoch, () => {
+          if (!ownsEpoch()) return
+          termRef.current?.scrollToBottom()
+          setTermLoading(false)
+        })
+      })
+
       ws.onopen = () => {
+        if (!ownsConnection()) return
         attempt = 0
         setWsState('open')
 
@@ -908,7 +945,7 @@ export function TerminalView({
             if (!cached || cached.cols !== sess.terminal_cols || cached.rows !== sess.terminal_rows) {
               const size = { cols: sess.terminal_cols, rows: sess.terminal_rows }
               setPtySize(size); ptySizeRef.current = size
-              queueResize(size)
+              queueResize(size, connectionEpoch)
             }
           }
           return
@@ -923,6 +960,7 @@ export function TerminalView({
       }
 
       ws.onmessage = (ev) => {
+        if (!ownsConnection()) return
         if (typeof ev.data === 'string') {
           try {
             const msg = JSON.parse(ev.data)
@@ -934,7 +972,7 @@ export function TerminalView({
               if (cols && rows) {
                 const size = { cols, rows }
                 setPtySize(size); ptySizeRef.current = size
-                queueResize(size)
+                queueResize(size, connectionEpoch)
               }
               return
             }
@@ -945,7 +983,7 @@ export function TerminalView({
               if (cols && rows) {
                 const size = { cols, rows }
                 setPtySize(size); ptySizeRef.current = size
-                queueResize(size)
+                queueResize(size, connectionEpoch)
                 releaseResizeEchoGate(size)
               }
               return
@@ -959,7 +997,7 @@ export function TerminalView({
             replay.push(data)
             return
           }
-          queueData(data, () => setTermLoading(false))
+          queueData(data, connectionEpoch, finishLoading)
           return
         }
 
@@ -972,14 +1010,17 @@ export function TerminalView({
           return
         }
 
-        queueData(data, () => setTermLoading(false))
+        queueData(data, connectionEpoch, finishLoading)
       }
 
       ws.onclose = () => {
+        // Retired session/reconnect sockets must not reset the active
+        // connection's resize gate or mark its UI as disconnected.
+        if (!ownsConnection()) return
+        wsRef.current = null
         resetResizeEchoGate()
+        setTermLoading(false)
         setWsState(prev => prev === 'open' ? 'lost' : prev)
-        if (disposed.current || intentionalClose) return
-        if (currentSessionId.current !== session.id) return
 
         const delay = Math.min(500 * Math.pow(2, attempt), 8000)
         attempt++
@@ -995,7 +1036,7 @@ export function TerminalView({
 
     return () => {
       intentionalClose = true
-      termEpochRef.current = epoch + 1
+      termEpochRef.current = activeEpoch + 1
       termIoRef.current?.reset(termEpochRef.current)
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
       reconnectTimer.current = null

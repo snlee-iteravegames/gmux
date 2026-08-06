@@ -244,6 +244,25 @@ describe('createTerminalIO', () => {
     expect(h.writes).toEqual(['a', 'b', 'c'])
   })
 
+  it('preserves ordering when xterm completes writes synchronously', () => {
+    const order: string[] = []
+    const io = createTerminalIO({
+      write(data, callback) {
+        order.push(typeof data === 'string' ? data : new TextDecoder().decode(data))
+        callback?.()
+      },
+      resize() {},
+    })
+
+    io.reset(1)
+    io.enqueueMany([enc('a'), enc('b')], 1)
+    io.reset(2, () => order.push('reset'))
+    io.enqueue(enc('c'), 2)
+
+    expect(order).toEqual(['a', 'b', 'reset', 'c'])
+    expect(io.hasPendingWork()).toBe(false)
+  })
+
   it('waits for queued writes before resizing', () => {
     const h = makeHarness()
     h.io.reset(1)
@@ -268,22 +287,48 @@ describe('createTerminalIO', () => {
     expect(h.resizes).toEqual([{ cols: 140, rows: 50 }])
   })
 
-  it('drops stale queued writes and resizes after epoch reset', () => {
+  it('serializes an epoch reset behind an in-flight write', () => {
     const h = makeHarness()
     const onWritten = vi.fn()
+    const order: string[] = []
 
     h.io.reset(1)
     h.io.enqueue(enc('stale'), 1, onWritten)
     h.io.requestResize({ cols: 90, rows: 20 }, 1)
-    h.io.reset(2)
-    h.io.enqueue(enc('fresh'), 2)
+    h.io.reset(2, () => order.push('reset'))
+    h.io.enqueue(enc('fresh'), 2, () => order.push('fresh-written'))
 
-    expect(h.writes).toEqual(['stale', 'fresh'])
+    // xterm has accepted only the old write. The reset boundary and fresh
+    // write must wait for its real callback instead of running concurrently.
+    expect(h.writes).toEqual(['stale'])
+    expect(order).toEqual([])
+
     h.flushOne()
-
     expect(onWritten).not.toHaveBeenCalled()
+    expect(order).toEqual(['reset'])
     expect(h.writes).toEqual(['stale', 'fresh'])
     expect(h.resizes).toEqual([])
+
+    h.flushOne()
+    expect(order).toEqual(['reset', 'fresh-written'])
+  })
+
+  it('keeps only the latest reset boundary across rapid epoch changes', () => {
+    const h = makeHarness()
+    const order: string[] = []
+
+    h.io.reset(1)
+    h.io.enqueue(enc('in-flight'), 1)
+    h.io.reset(2, () => order.push('reset-2'))
+    h.io.enqueue(enc('dropped-2'), 2)
+    h.io.reset(3, () => order.push('reset-3'))
+    h.io.enqueue(enc('fresh-3'), 3)
+
+    expect(h.writes).toEqual(['in-flight'])
+    h.flushOne()
+
+    expect(order).toEqual(['reset-3'])
+    expect(h.writes).toEqual(['in-flight', 'fresh-3'])
   })
 
   it('runs completion callback after the final chunk in enqueueMany', () => {
@@ -978,6 +1023,29 @@ describe('scroll preservation across BSU/ESU', () => {
     // No scroll restore should have happened
     expect(h.scrollToLineCalls.length).toBe(0)
     expect(h.scrollToBottomCalls.length).toBe(0)
+    h.cleanup()
+  })
+
+  it('ignores a stale in-flight ESU callback after epoch reset', () => {
+    const h = makeScrollHarness({ scrollbackLimit: 100, rows: 25 })
+    h.io.reset(1)
+    h.addLines(100)
+    h.userScrollTo(50)
+
+    // The synchronized frame is accepted by xterm but its callback has not
+    // fired when ownership moves to the next session.
+    h.io.enqueue(wrapBSU('old session'), 1)
+    h.io.reset(2)
+    h.io.enqueue(enc('new session'), 2)
+
+    expect(h.writes).toEqual([new TextDecoder().decode(wrapBSU('old session'))])
+    h.flushOne(5)
+    expect(h.writes.at(-1)).toBe('new session')
+    h.flushOne(0)
+    h.flushRAF()
+
+    expect(h.scrollToLineCalls).toEqual([])
+    expect(h.scrollToBottomCalls).toEqual([])
     h.cleanup()
   })
 })
