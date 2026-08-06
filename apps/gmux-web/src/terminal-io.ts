@@ -36,14 +36,27 @@ export interface ScrollAccessor {
   getLine(y: number): string | null
 }
 
-interface QueueItem {
+interface WriteItem {
+  kind: 'write'
   epoch: number
   data: Uint8Array
   onWritten?: () => void
 }
 
+interface ResetItem {
+  kind: 'reset'
+  epoch: number
+  resetTerminal: () => void
+}
+
+type QueueItem = WriteItem | ResetItem
+
 export interface TerminalIO {
-  reset(epoch: number): void
+  /**
+   * Start a new ownership epoch. If supplied, resetTerminal is serialized
+   * after any write already accepted by xterm and before new-epoch work.
+   */
+  reset(epoch: number, resetTerminal?: () => void): void
   /** Mark the next BSU/ESU block as a replay: scroll to bottom unconditionally. */
   forceNextScrollToBottom(): void
   enqueue(data: Uint8Array, epoch: number, onWritten?: () => void): void
@@ -239,13 +252,27 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
 
     const next = queue.shift()
     if (next) {
+      if (next.kind === 'reset') {
+        // xterm writes cannot be cancelled. Keeping the reset in the same
+        // queue guarantees an old session's accepted write finishes before
+        // the new session clears the terminal and starts rendering.
+        next.resetTerminal()
+        pump()
+        return
+      }
+
       writeInFlight = true
       maybeSaveScroll(next.data)
       maybeMarkBufferReset(next.data)
       term.write(next.data, () => {
-        maybeRestoreScroll(next.data)
+        // reset() clears the shared scroll bookkeeping immediately. A stale
+        // write callback must not recreate or consume state owned by the new
+        // epoch; it only releases the physical xterm write lock.
+        if (next.epoch === currentEpoch) {
+          maybeRestoreScroll(next.data)
+          next.onWritten?.()
+        }
         writeInFlight = false
-        if (next.epoch === currentEpoch) next.onWritten?.()
         pump()
       })
       return
@@ -268,10 +295,12 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
   }
 
   return {
-    reset(epoch: number) {
+    reset(epoch: number, resetTerminal?: () => void) {
       currentEpoch = epoch
-      queue = []
-      writeInFlight = false
+      // Drop queued work from the previous owner, but never pretend an
+      // already-started term.write has completed. The optional reset boundary
+      // waits behind that physical write and stays ahead of new-epoch work.
+      queue = resetTerminal ? [{ kind: 'reset', epoch, resetTerminal }] : []
       pendingResize = null
       savedScroll = null
       bufferReset = false
@@ -280,6 +309,7 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
         cancelAnimationFrame(restoreRAF)
         restoreRAF = null
       }
+      pump()
     },
 
     forceNextScrollToBottom() {
@@ -288,14 +318,14 @@ export function createTerminalIO(term: TerminalWriter, scroll?: ScrollAccessor):
 
     enqueue(data: Uint8Array, epoch: number, onWritten?: () => void) {
       if (epoch !== currentEpoch) return
-      queue.push({ epoch, data, onWritten })
+      queue.push({ kind: 'write', epoch, data, onWritten })
       pump()
     },
 
     enqueueMany(chunks: Uint8Array[], epoch: number, onWritten?: () => void) {
       if (epoch !== currentEpoch || chunks.length === 0) return
       for (let i = 0; i < chunks.length; i++) {
-        queue.push({ epoch, data: chunks[i], onWritten: i === chunks.length - 1 ? onWritten : undefined })
+        queue.push({ kind: 'write', epoch, data: chunks[i], onWritten: i === chunks.length - 1 ? onWritten : undefined })
       }
       pump()
     },
