@@ -134,6 +134,7 @@ body {
 /* ── Sidebar ── */
 
 .sidebar {
+  position: relative;
   width: var(--sidebar-width);
   min-width: var(--sidebar-width);
   height: 100%;
@@ -142,6 +143,37 @@ body {
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border);
   overflow: hidden;
+}
+
+.sidebar-resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+.sidebar-resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 6px;
+  width: 2px;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+.sidebar-resize-handle:hover::after,
+.sidebar-resize-handle:focus-visible::after,
+body.sidebar-resizing .sidebar-resize-handle::after {
+  background: var(--accent);
+}
+body.sidebar-resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .sidebar-header {
@@ -537,6 +569,22 @@ body {
 }
 .folder-probe-link { text-decoration: none; }
 .folder-probe-link:hover { text-decoration: underline; }
+/* Worktree lanes can carry several independent script probes. Keep every
+   status readable instead of squeezing all metadata into one ellipsized row. */
+.repository-lane .folder-probe-metadata {
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 5px;
+  overflow: visible;
+  white-space: normal;
+}
+.repository-lane .folder-probe-item {
+  flex: 0 0 auto;
+  max-width: 100%;
+  overflow: visible;
+  text-overflow: clip;
+}
+
 .folder-probe-metadata.hub-folder-probe {
   margin-top: 6px;
   max-width: min(100%, 720px);
@@ -2461,6 +2509,10 @@ body {
    Uses pointer:coarse so tablets in landscape still get touch controls,
    while a desktop user with a narrow window keeps the sidebar visible. */
 @media (pointer: coarse) {
+  .sidebar-resize-handle {
+    display: none;
+  }
+
   .sidebar {
     position: fixed;
     left: 0;

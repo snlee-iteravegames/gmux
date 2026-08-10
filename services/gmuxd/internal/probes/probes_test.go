@@ -124,6 +124,7 @@ func TestCollectGitUpstreamDivergenceIsOptional(t *testing.T) {
 
 func TestCollectTargetsCanonicalDedupAndRemoteExclusion(t *testing.T) {
 	root := t.TempDir()
+	worktree := t.TempDir()
 	alias := filepath.Join(t.TempDir(), "alias")
 	if err := os.Symlink(root, alias); err != nil {
 		t.Fatal(err)
@@ -133,19 +134,28 @@ func TestCollectTargetsCanonicalDedupAndRemoteExclusion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	canonicalWorktree, err := filepath.EvalSymlinks(worktree)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	got := CollectTargets([]string{root, alias}, []SessionTarget{
 		{Cwd: root},
-		{WorkspaceRoot: alias, Cwd: t.TempDir()},
-		{Peer: "remote-hub", WorkspaceRoot: remoteOnly},
+		{WorkspaceRoot: alias, Cwd: worktree},
+		{Peer: "remote-hub", WorkspaceRoot: remoteOnly, Cwd: t.TempDir()},
 	})
-	if len(got) != 1 || got[0] != canonicalRoot {
-		t.Fatalf("targets = %#v, want only canonical %q", got, canonicalRoot)
+	if len(got) != 2 {
+		t.Fatalf("targets = %#v, want repository root and linked-worktree cwd", got)
 	}
+	want := map[string]bool{canonicalRoot: true, canonicalWorktree: true}
 	for _, target := range got {
-		if target == remoteOnly {
-			t.Fatal("remote session workspace was collected")
+		if !want[target] {
+			t.Fatalf("unexpected target %q in %#v", target, got)
 		}
+		delete(want, target)
+	}
+	if len(want) != 0 {
+		t.Fatalf("targets = %#v, missing %#v", got, want)
 	}
 }
 

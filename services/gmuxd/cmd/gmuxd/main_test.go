@@ -572,6 +572,7 @@ func TestComposeProjectsDataIncludesDirectoryProbes(t *testing.T) {
 
 func TestCollectDirectoryProbeTargetsExcludesReferencesAndPeerSessions(t *testing.T) {
 	local := t.TempDir()
+	localWorktree := t.TempDir()
 	remoteConfigured := t.TempDir()
 	remoteSession := t.TempDir()
 	state := &projects.State{Items: []projects.Item{
@@ -582,12 +583,23 @@ func TestCollectDirectoryProbeTargetsExcludesReferencesAndPeerSessions(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	canonicalWorktree, err := filepath.EvalSymlinks(localWorktree)
+	if err != nil {
+		t.Fatal(err)
+	}
 	got := collectDirectoryProbeTargets(state, []store.Session{
-		{ID: "local", Cwd: local},
-		{ID: "remote", Peer: "tower", WorkspaceRoot: remoteSession},
+		{ID: "local", WorkspaceRoot: local, Cwd: localWorktree},
+		{ID: "remote", Peer: "tower", WorkspaceRoot: remoteSession, Cwd: t.TempDir()},
 	})
-	if len(got) != 1 || got[0] != canonicalLocal {
-		t.Fatalf("targets = %#v, want only %q", got, canonicalLocal)
+	if len(got) != 2 {
+		t.Fatalf("targets = %#v, want repository root and worktree cwd", got)
+	}
+	want := map[string]bool{canonicalLocal: true, canonicalWorktree: true}
+	for _, target := range got {
+		delete(want, target)
+	}
+	if len(want) != 0 {
+		t.Fatalf("targets = %#v, missing %#v", got, want)
 	}
 }
 

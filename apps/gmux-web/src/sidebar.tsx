@@ -5,7 +5,8 @@
  * callbacks and the mobile open/close toggle are passed as props.
  */
 
-import { useState, useCallback } from 'preact/hooks'
+import type { JSX } from 'preact'
+import { useState, useCallback, useEffect } from 'preact/hooks'
 import { sessionPath } from './routing'
 import { reorderKeysForFolder } from './projects'
 import { LaunchButton } from './launcher'
@@ -26,6 +27,22 @@ import type { Session, Folder } from './types'
 // ── Types ──
 
 export type NotifPermission = 'default' | 'granted' | 'denied' | 'unavailable'
+
+const SIDEBAR_WIDTH_STORAGE_KEY = 'gmux.sidebar.width'
+export const SIDEBAR_MIN_WIDTH = 248
+export const SIDEBAR_MAX_WIDTH = 520
+export const SIDEBAR_DEFAULT_WIDTH = 272
+
+export function clampSidebarWidth(width: number): number {
+  if (!Number.isFinite(width)) return SIDEBAR_DEFAULT_WIDTH
+  return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)))
+}
+
+function storedSidebarWidth(): number {
+  if (typeof window === 'undefined') return SIDEBAR_DEFAULT_WIDTH
+  const stored = Number.parseFloat(window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY) ?? '')
+  return clampSidebarWidth(stored)
+}
 
 // Re-export DotState so existing imports keep working.
 export type { DotState }
@@ -452,6 +469,7 @@ export function Sidebar({
   onClose: () => void
 }) {
   // Read signals; component re-renders only when these values change.
+  const [sidebarWidth, setSidebarWidth] = useState(storedSidebarWidth)
   const foldersVal = folders.value
   const projectsVal = projects.value
   const selId = selectedId.value
@@ -473,6 +491,43 @@ export function Sidebar({
   const hasUnresolved = unresolvedHosts.value.length > 0
   const bgArrival = useArrivalPulse(waiting ? 'unread' : 'none', waitingCount)
 
+  useEffect(() => {
+    document.documentElement.style.setProperty('--sidebar-width', `${sidebarWidth}px`)
+    window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth))
+  }, [sidebarWidth])
+
+  const handleSidebarResizeStart = useCallback((event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = sidebarWidth
+    document.body.classList.add('sidebar-resizing')
+
+    const handleMove = (moveEvent: PointerEvent) => {
+      setSidebarWidth(clampSidebarWidth(startWidth + moveEvent.clientX - startX))
+    }
+    const handleEnd = () => {
+      document.body.classList.remove('sidebar-resizing')
+      window.removeEventListener('pointermove', handleMove)
+      window.removeEventListener('pointerup', handleEnd)
+      window.removeEventListener('pointercancel', handleEnd)
+    }
+    window.addEventListener('pointermove', handleMove)
+    window.addEventListener('pointerup', handleEnd)
+    window.addEventListener('pointercancel', handleEnd)
+  }, [sidebarWidth])
+
+  const handleSidebarResizeKey = useCallback((event: JSX.TargetedKeyboardEvent<HTMLDivElement>) => {
+    let next: number | undefined
+    if (event.key === 'ArrowLeft') next = sidebarWidth - 16
+    if (event.key === 'ArrowRight') next = sidebarWidth + 16
+    if (event.key === 'Home') next = SIDEBAR_MIN_WIDTH
+    if (event.key === 'End') next = SIDEBAR_MAX_WIDTH
+    if (next === undefined) return
+    event.preventDefault()
+    setSidebarWidth(clampSidebarWidth(next))
+  }, [sidebarWidth])
+
   const totalVisible = foldersVal.reduce(
     (n, f) => n + f.sessions.filter(s => s.alive || s.resumable).length, 0,
   )
@@ -492,6 +547,19 @@ export function Sidebar({
     <>
       <div class={`sidebar-overlay ${open ? 'visible' : ''}`} onClick={onClose} />
       <aside class={`sidebar ${open ? 'open' : ''}`}>
+        <div
+          class="sidebar-resize-handle"
+          role="separator"
+          aria-label="Resize sidebar"
+          aria-orientation="vertical"
+          aria-valuemin={SIDEBAR_MIN_WIDTH}
+          aria-valuemax={SIDEBAR_MAX_WIDTH}
+          aria-valuenow={sidebarWidth}
+          tabIndex={0}
+          onPointerDown={handleSidebarResizeStart}
+          onKeyDown={handleSidebarResizeKey}
+          onDblClick={() => setSidebarWidth(SIDEBAR_DEFAULT_WIDTH)}
+        />
         <div class="sidebar-header">
           <a
             class={`sidebar-logo${waiting ? ' bg-waiting' : ''}${bgArrival ? ` bg-${bgArrival}` : ''}`}
