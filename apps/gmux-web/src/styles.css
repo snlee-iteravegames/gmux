@@ -730,6 +730,64 @@ body {
   min-width: 0;
 }
 
+.session-rename-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 2px;
+  border: 0;
+  border-radius: 3px;
+  color: var(--text-muted);
+  background: transparent;
+  opacity: 0.55;
+  cursor: pointer;
+}
+.session-item:hover .session-rename-btn,
+.session-rename-btn:focus-visible {
+  opacity: 1;
+}
+.session-rename-btn:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.session-rename-btn svg {
+  width: 11px;
+  height: 11px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.session-name-input {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  padding: 1px 4px;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  outline: none;
+  color: var(--text);
+  background: var(--bg-surface);
+  font: inherit;
+  font-size: 14px;
+}
+.session-name-input.error {
+  border-color: var(--status-error);
+}
+.session-name-input:disabled {
+  opacity: 0.65;
+}
+.session-rename-error {
+  color: var(--status-error);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
 .session-state-badge {
   flex-shrink: 0;
   max-width: 96px;

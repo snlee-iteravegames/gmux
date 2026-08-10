@@ -23,6 +23,13 @@ func TestPathMaterializesReadableExtension(t *testing.T) {
 	if !strings.Contains(string(data), "session_start") {
 		t.Error("materialized extension missing session_start handler")
 	}
+	if !strings.Contains(string(data), "pi.setSessionName(command.name)") ||
+		!strings.Contains(string(data), "pi.getSessionName()") {
+		t.Error("materialized extension missing canonical pi rename API calls")
+	}
+	if strings.Contains(string(data), `path: "/input"`) {
+		t.Error("session rename must never use PTY /input injection")
+	}
 
 	// Idempotent: a second call returns the same path.
 	p2, err := Path()

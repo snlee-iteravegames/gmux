@@ -3,6 +3,7 @@ package discovery
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -200,6 +201,46 @@ func TestSendInput_DeliversBodyToRunner(t *testing.T) {
 // response becomes a meaningful error rather than a silent
 // success. Otherwise `gmux --send` would print nothing and exit 0
 // when the runner rejected the input.
+func TestRenameSessionReturnsCanonicalRunnerName(t *testing.T) {
+	var got struct {
+		Name                string `json:"name"`
+		ExpectedSessionFile string `json:"expected_session_file"`
+	}
+	s := startUnixServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/name" {
+			t.Errorf("runner saw %s %s, want PUT /name", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Error(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"name":"canonical"}`))
+	}))
+	defer s.cleanup()
+
+	name, err := RenameSession(context.Background(), s.socketPath, "requested", "/tmp/session.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "canonical" {
+		t.Fatalf("name = %q", name)
+	}
+	if got.Name != "requested" || got.ExpectedSessionFile != "/tmp/session.jsonl" {
+		t.Fatalf("runner request = %+v", got)
+	}
+}
+
+func TestRenameSessionSurfacesUnavailableRunner(t *testing.T) {
+	s := startUnixServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "pi rename control unavailable", http.StatusServiceUnavailable)
+	}))
+	defer s.cleanup()
+	_, err := RenameSession(context.Background(), s.socketPath, "x", "/tmp/session.jsonl")
+	if err == nil || !strings.Contains(err.Error(), "503") {
+		t.Fatalf("error = %v, want runner 503", err)
+	}
+}
+
 func TestSendInput_SurfacesRunnerErrors(t *testing.T) {
 	s := startUnixServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "write pty: broken pipe", http.StatusInternalServerError)

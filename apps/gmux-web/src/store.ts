@@ -137,6 +137,7 @@ export type PendingMutation =
   | { kind: 'mark-read'; id: string; at: number }
   | { kind: 'dismiss'; id: string; at: number }
   | { kind: 'reorder'; slug: string; sessions: string[]; at: number }
+  | { kind: 'rename'; id: string; title: string; at: number }
 
 export const _pendingMutations = signal<PendingMutation[]>([])
 
@@ -167,6 +168,9 @@ export function applyPending(
       case 'reorder':
         projs = projs.map(p => p.slug !== m.slug ? p : ({ ...p, sessions: m.sessions }))
         break
+      case 'rename':
+        sess = sess.map(s => s.id !== m.id ? s : ({ ...s, title: m.title }))
+        break
     }
   }
   return { sessions: sess, projects: projs }
@@ -193,6 +197,10 @@ function isResolved(
       if (!p) return true
       const cur = p.sessions ?? []
       return cur.length === m.sessions.length && cur.every((v, i) => v === m.sessions[i])
+    }
+    case 'rename': {
+      const s = rawSessions.find(x => x.id === m.id)
+      return !s || s.title === m.title
     }
   }
 }
@@ -1205,6 +1213,40 @@ export function resumeSession(sessionId: string): Promise<void> {
 
 export function restartSession(sessionId: string): Promise<void> {
   return postAction(`/v1/sessions/${sessionId}/restart`)
+}
+
+/** Rename a live pi session through its owner. The optimistic title survives
+ * snapshot replacement until the authoritative SSE title arrives. Failure
+ * removes only this mutation, restoring the latest raw title immediately. */
+export async function renameSession(sessionId: string, name: string): Promise<string> {
+  const requested = name.trim()
+  if (!requested) throw new Error('Session name is required')
+
+  const pending: PendingMutation = { kind: 'rename', id: sessionId, title: requested, at: Date.now() }
+  addPending(pending)
+  try {
+    const resp = await fetch(`/v1/sessions/${sessionId}/name`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: requested }),
+    })
+    const body = await resp.json().catch(() => ({})) as {
+      data?: { name?: string }
+      error?: { message?: string }
+    }
+    if (!resp.ok) throw new Error(body.error?.message || 'Could not rename session')
+    const canonical = body.data?.name
+    if (!canonical) throw new Error('Could not rename session')
+
+    _pendingMutations.value = _pendingMutations.value.filter(x => x !== pending)
+    if (_rawSessions.value.find(s => s.id === sessionId)?.title !== canonical) {
+      addPending({ kind: 'rename', id: sessionId, title: canonical, at: Date.now() })
+    }
+    return canonical
+  } catch (err) {
+    _pendingMutations.value = _pendingMutations.value.filter(x => x !== pending)
+    throw err
+  }
 }
 
 // ── Launch ───────────────────────────────────────────────────────────────────

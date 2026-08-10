@@ -62,6 +62,31 @@ var version = "dev"
 // runner.
 const maxInputBytes = 1 << 20 // 1 MiB
 
+const maxSessionNameBytes = 200
+
+// validateSessionName normalizes only surrounding Unicode whitespace. Pi owns
+// all other canonicalization. Control bytes are rejected before they can reach
+// process metadata or logs, and the limit is measured on the UTF-8 wire form.
+func validateSessionName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("name is required")
+	}
+	if len([]byte(name)) > maxSessionNameBytes {
+		return "", fmt.Errorf("name is too long")
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			return "", fmt.Errorf("name contains control characters")
+		}
+	}
+	return name, nil
+}
+
+func sessionRenameAvailable(sess store.Session) bool {
+	return sess.Alive && sess.Kind == "pi" && sess.SocketPath != "" && sess.SessionFile != ""
+}
+
 type LaunchConfig struct {
 	DefaultLauncher string             `json:"default_launcher"`
 	Launchers       []adapter.Launcher `json:"launchers"`
@@ -1592,6 +1617,42 @@ func serve(stderr io.Writer) int {
 				}
 			})
 			writeJSON(w, map[string]any{"ok": true, "data": map[string]any{}})
+
+		case "name":
+			if r.Method != http.MethodPut {
+				writeError(w, http.StatusMethodNotAllowed, "bad_request", "method not allowed")
+				return
+			}
+			var req struct {
+				Name string `json:"name"`
+			}
+			if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil {
+				writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON")
+				return
+			}
+			name, err := validateSessionName(req.Name)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid_name", err.Error())
+				return
+			}
+			sess, ok := sessions.Get(sessionID)
+			if !ok {
+				writeError(w, http.StatusNotFound, "not_found", "session not found")
+				return
+			}
+			if !sessionRenameAvailable(sess) {
+				writeError(w, http.StatusConflict, "rename_unavailable", "rename is unavailable for this session")
+				return
+			}
+			canonical, err := discovery.RenameSession(r.Context(), sess.SocketPath, name, sess.SessionFile)
+			if err != nil {
+				log.Printf("rename: %s: %v", sessionID, err)
+				writeError(w, http.StatusBadGateway, "rename_failed", "could not rename session")
+				return
+			}
+			writeJSON(w, map[string]any{
+				"ok": true, "data": map[string]any{"name": canonical},
+			})
 
 		case "input":
 			// Cross-peer `gmux --send`. The peer-routing branch above

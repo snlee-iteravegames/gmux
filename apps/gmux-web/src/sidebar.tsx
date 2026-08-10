@@ -13,7 +13,7 @@ import { useArrivalPulse } from './use-arrival-pulse'
 import {
   folders, selectedId, currentProjectKey,
   activityMap, projects, connState,
-  updateProjects, reorderSessions,
+  updateProjects, reorderSessions, renameSession,
   peerStatusByName, isSessionUnavailable, localPeerNames, sessionDotState,
   unreadCount, localHostLabel, unresolvedHosts, duplicateSessionFiles,
   type DotState,
@@ -66,6 +66,12 @@ interface DragState {
 }
 
 // ── Components ──
+
+/** Rename is intentionally limited to reachable, currently-running pi
+ * sessions. Dead/resumable and other adapter rows never expose the action. */
+export function canRenameSession(session: Pick<Session, 'alive' | 'kind'>, unavailable = false): boolean {
+  return session.alive && session.kind === 'pi' && !unavailable
+}
 
 /** Container icon for a devcontainer session inside a mixed-host
  *  folder. Replaces the per-row PeerLabel pill (which didn't tell
@@ -130,6 +136,33 @@ function SessionItem({
   onDragOver?: () => void
   onDragEnd?: () => void
 }) {
+  const [editingName, setEditingName] = useState(false)
+  const [nameDraft, setNameDraft] = useState(session.title)
+  const [savingName, setSavingName] = useState(false)
+  const [renameError, setRenameError] = useState('')
+  const canRename = canRenameSession(session, unavailable)
+
+  const cancelRename = () => {
+    if (savingName) return
+    setEditingName(false)
+    setNameDraft(session.title)
+    setRenameError('')
+  }
+  const saveRename = async () => {
+    if (savingName) return
+    setSavingName(true)
+    setRenameError('')
+    try {
+      const canonical = await renameSession(session.id, nameDraft)
+      setNameDraft(canonical)
+      setEditingName(false)
+    } catch {
+      setRenameError('Rename failed')
+    } finally {
+      setSavingName(false)
+    }
+  }
+
   const effectiveDotState = resuming ? 'working' : rawDotState
   // Nothing is "unread" if you're already looking at it.
   const dotState = (selected && (effectiveDotState === 'error' || effectiveDotState === 'unread')) ? 'none' : effectiveDotState
@@ -208,9 +241,50 @@ function SessionItem({
       {showHostMarker && session.peer && <DevcontainerMarker peer={session.peer} />}
       <div class="session-content">
         <div class="session-title-row">
-          <span class="session-title">{session.title}</span>
+          {editingName ? (
+            <input
+              class={`session-name-input${renameError ? ' error' : ''}`}
+              aria-label="Session name"
+              aria-invalid={!!renameError}
+              value={nameDraft}
+              disabled={savingName}
+              autoFocus
+              onInput={(e) => setNameDraft(e.currentTarget.value)}
+              onClick={(e) => { e.stopPropagation(); e.preventDefault() }}
+              onPointerDown={(e) => e.stopPropagation()}
+              onDragStart={(e) => { e.stopPropagation(); e.preventDefault() }}
+              onKeyDown={(e) => {
+                e.stopPropagation()
+                if (e.key === 'Enter') { e.preventDefault(); void saveRename() }
+                if (e.key === 'Escape') { e.preventDefault(); cancelRename() }
+              }}
+              onBlur={cancelRename}
+            />
+          ) : (
+            <span class="session-title">{session.title}</span>
+          )}
+          {canRename && !editingName && (
+            <button
+              class="session-rename-btn"
+              type="button"
+              aria-label={`Rename ${session.title}`}
+              title="Rename session"
+              onPointerDown={(e) => e.stopPropagation()}
+              onDragStart={(e) => { e.stopPropagation(); e.preventDefault() }}
+              onClick={(e) => {
+                e.stopPropagation()
+                e.preventDefault()
+                setNameDraft(session.title)
+                setRenameError('')
+                setEditingName(true)
+              }}
+            >
+              <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 8.8 1.5 10.5l1.7-.5 6.4-6.4-1.2-1.2Z"/><path d="m7.8 3 1.2 1.2"/></svg>
+            </button>
+          )}
           <span class={`session-state-badge ${stateKind}`} title={stateLabel}>{stateLabel}</span>
         </div>
+        {renameError && <div class="session-rename-error" role="alert">{renameError}</div>}
         {duplicateOpen && (
           <div class="session-meta">
             <span class="session-dup-warning" title="This conversation is open in more than one tab">⚠ open elsewhere</span>

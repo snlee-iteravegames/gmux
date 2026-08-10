@@ -176,6 +176,31 @@ func TestForwardAction_PathConstruction(t *testing.T) {
 	}
 }
 
+func TestForwardAction_PreservesRenameMethodBodyAndResponse(t *testing.T) {
+	var gotMethod, gotPath, gotBody string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"error":{"message":"rename unavailable"}}`))
+	}))
+	defer ts.Close()
+
+	c := New(ts.URL)
+	req := httptest.NewRequest(http.MethodPut, "/v1/sessions/sess-1@peer/name", strings.NewReader(`{"name":"new"}`))
+	w := httptest.NewRecorder()
+	c.ForwardAction(w, req, "sess-1", "name")
+
+	if gotMethod != http.MethodPut || gotPath != "/v1/sessions/sess-1/name" || gotBody != `{"name":"new"}` {
+		t.Fatalf("upstream got %s %s body=%s", gotMethod, gotPath, gotBody)
+	}
+	if w.Code != http.StatusConflict || w.Header().Get("Content-Type") != "application/json" || !strings.Contains(w.Body.String(), "rename unavailable") {
+		t.Fatalf("proxy response status=%d content-type=%q body=%s", w.Code, w.Header().Get("Content-Type"), w.Body.String())
+	}
+}
+
 func TestForwardAction_BearerInjected(t *testing.T) {
 	var gotAuth string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -673,7 +698,6 @@ func TestProxyWS_NoCompressionToBrowser(t *testing.T) {
 		t.Errorf("server negotiated permessage-deflate (%q); it must stay disabled on the browser-facing peer hop (#279)", ext)
 	}
 }
-
 
 // TestForwardAction_PreservesQueryString locks in the contract that
 // action endpoints with query parameters (e.g. /scrollback?tail=N)

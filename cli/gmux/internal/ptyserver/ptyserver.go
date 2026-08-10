@@ -172,6 +172,44 @@ type Server struct {
 	done    chan struct{} // closed when child exits
 	ptyDone chan struct{} // closed when readPTY finishes draining
 	err     error         // child exit error
+
+	// Reverse control is intentionally limited to one active long poll and one
+	// in-flight command. It is ephemeral coordination state owned by this
+	// runner; the canonical name remains pi's session metadata.
+	controlMu      sync.Mutex
+	controlSeq     uint64
+	controlWaiter  *controlWaiter
+	controlPending *controlPending
+}
+
+type controlCommand struct {
+	ID                  string `json:"id"`
+	Op                  string `json:"op"`
+	Name                string `json:"name"`
+	ExtensionInstance   string `json:"extension_instance"`
+	ExpectedSessionFile string `json:"expected_session_file"`
+}
+
+type controlResult struct {
+	ID                  string `json:"id"`
+	ExtensionInstance   string `json:"extension_instance"`
+	ExpectedSessionFile string `json:"expected_session_file"`
+	OK                  bool   `json:"ok"`
+	Name                string `json:"name,omitempty"`
+	Error               string `json:"error,omitempty"`
+}
+
+type controlWaiter struct {
+	instance    string
+	sessionFile string
+	command     chan controlCommand
+}
+
+type controlPending struct {
+	id          string
+	instance    string
+	sessionFile string
+	result      chan controlResult
 }
 
 type wsClient struct {
@@ -465,6 +503,9 @@ func (s *Server) serve() {
 	// HTTP endpoints (checked first via explicit paths)
 	mux.HandleFunc("GET /meta", s.handleMeta)
 	mux.HandleFunc("POST /hook/event", s.handleHookEvent)
+	mux.HandleFunc("POST /hook/control/next", s.handleControlNext)
+	mux.HandleFunc("POST /hook/control/result", s.handleControlResult)
+	mux.HandleFunc("PUT /name", s.handlePutName)
 	mux.HandleFunc("POST /input", s.handleInput)
 	mux.HandleFunc("PUT /status", s.handlePutStatus)
 	mux.HandleFunc("PUT /slug", s.handlePutSlug)
@@ -573,8 +614,171 @@ func (s *Server) handleHookEvent(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		s.applyTurnEnd(ev.Outcome, ev.Title)
+	case "title":
+		// Immediate canonical metadata update (e.g. pi setSessionName).
+		// The file identity prevents a delayed event from an old pi session
+		// from renaming the conversation bound after an in-process switch.
+		if ev.Title != "" && ev.Path != "" && s.state.SessionFileSnapshot() == ev.Path {
+			s.state.SetAdapterTitle(ev.Title)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+const (
+	controlPollTimeout   = 20 * time.Second
+	controlResultTimeout = 2 * time.Second
+)
+
+// handleControlNext is the extension-owned long poll. The active session file
+// and a per-session extension instance form a lease: /name commands are sent
+// only to this exact waiter, never to a process that has switched conversations.
+func (s *Server) handleControlNext(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ExtensionInstance   string `json:"extension_instance"`
+		ExpectedSessionFile string `json:"expected_session_file"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil || req.ExtensionInstance == "" || req.ExpectedSessionFile == "" {
+		http.Error(w, "invalid control poll", http.StatusBadRequest)
+		return
+	}
+	if s.state == nil || s.state.SessionFileSnapshot() != req.ExpectedSessionFile {
+		http.Error(w, "session changed", http.StatusConflict)
+		return
+	}
+
+	waiter := &controlWaiter{
+		instance: req.ExtensionInstance, sessionFile: req.ExpectedSessionFile,
+		command: make(chan controlCommand, 1),
+	}
+	s.controlMu.Lock()
+	if s.controlWaiter != nil {
+		s.controlMu.Unlock()
+		http.Error(w, "control poll already active", http.StatusConflict)
+		return
+	}
+	s.controlWaiter = waiter
+	s.controlMu.Unlock()
+	defer func() {
+		s.controlMu.Lock()
+		if s.controlWaiter == waiter {
+			s.controlWaiter = nil
+		}
+		s.controlMu.Unlock()
+	}()
+
+	select {
+	case command := <-waiter.command:
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(command)
+	case <-r.Context().Done():
+		return
+	case <-time.After(controlPollTimeout):
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// handleControlResult accepts exactly the ACK for the single pending command.
+// All three identities must match and the runner must still be bound to the
+// expected conversation before the result can unblock PUT /name.
+func (s *Server) handleControlResult(w http.ResponseWriter, r *http.Request) {
+	var result controlResult
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&result); err != nil {
+		http.Error(w, "invalid control result", http.StatusBadRequest)
+		return
+	}
+	s.controlMu.Lock()
+	pending := s.controlPending
+	valid := pending != nil && result.ID == pending.id &&
+		result.ExtensionInstance == pending.instance &&
+		result.ExpectedSessionFile == pending.sessionFile &&
+		s.state != nil && s.state.SessionFileSnapshot() == pending.sessionFile
+	if valid {
+		s.controlPending = nil
+	}
+	s.controlMu.Unlock()
+	if !valid {
+		http.Error(w, "stale control result", http.StatusConflict)
+		return
+	}
+	pending.result <- result
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handlePutName asks the active pi extension to rename its current session.
+// Success is returned only after pi's setter has run and its getter supplied
+// the canonical name. No PTY bytes are involved.
+func (s *Server) handlePutName(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name                string `json:"name"`
+		ExpectedSessionFile string `json:"expected_session_file"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil || req.Name == "" || req.ExpectedSessionFile == "" {
+		http.Error(w, "invalid rename request", http.StatusBadRequest)
+		return
+	}
+	if s.adapter == nil || s.adapter.Name() != "pi" {
+		http.Error(w, "rename is only available for pi sessions", http.StatusConflict)
+		return
+	}
+	if s.state == nil || s.state.SessionFileSnapshot() != req.ExpectedSessionFile {
+		http.Error(w, "session changed", http.StatusConflict)
+		return
+	}
+
+	s.controlMu.Lock()
+	waiter := s.controlWaiter
+	if s.controlPending != nil {
+		s.controlMu.Unlock()
+		http.Error(w, "rename already in progress", http.StatusConflict)
+		return
+	}
+	if waiter == nil || waiter.sessionFile != req.ExpectedSessionFile {
+		s.controlMu.Unlock()
+		http.Error(w, "pi rename control unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	s.controlSeq++
+	id := fmt.Sprintf("rename-%d", s.controlSeq)
+	pending := &controlPending{
+		id: id, instance: waiter.instance, sessionFile: waiter.sessionFile,
+		result: make(chan controlResult, 1),
+	}
+	s.controlPending = pending
+	command := controlCommand{
+		ID: id, Op: "set_session_name", Name: req.Name,
+		ExtensionInstance: waiter.instance, ExpectedSessionFile: waiter.sessionFile,
+	}
+	waiter.command <- command
+	s.controlMu.Unlock()
+
+	select {
+	case result := <-pending.result:
+		if !result.OK || result.Name == "" {
+			msg := result.Error
+			if msg == "" {
+				msg = "pi rejected the name"
+			}
+			http.Error(w, msg, http.StatusBadGateway)
+			return
+		}
+		s.state.SetAdapterTitle(result.Name)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"name": result.Name})
+	case <-r.Context().Done():
+		s.clearControlPending(pending)
+	case <-time.After(controlResultTimeout):
+		s.clearControlPending(pending)
+		http.Error(w, "pi rename timed out", http.StatusGatewayTimeout)
+	}
+}
+
+func (s *Server) clearControlPending(pending *controlPending) {
+	s.controlMu.Lock()
+	if s.controlPending == pending {
+		s.controlPending = nil
+	}
+	s.controlMu.Unlock()
 }
 
 // applyTurnEnd maps a normalized turn outcome to sidebar state. This is the
