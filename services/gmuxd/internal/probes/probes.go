@@ -102,12 +102,13 @@ func CollectTargets(configured []string, sessions []SessionTarget) []string {
 		if session.Peer != "" {
 			continue
 		}
-		root := session.WorkspaceRoot
-		if root == "" {
-			root = session.Cwd
-		}
-		if root != "" && add(root) {
-			break
+		// WorkspaceRoot identifies the repository group, while Cwd can identify
+		// a distinct linked-worktree lane. Probe both without conflating them.
+		for _, candidate := range []string{session.Cwd, session.WorkspaceRoot} {
+			if candidate != "" && add(candidate) {
+				sort.Strings(out)
+				return out
+			}
 		}
 	}
 	sort.Strings(out)
@@ -151,7 +152,7 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		TTL:              15 * time.Second,
-		GitTimeout:       2 * time.Second,
+		GitTimeout:       5 * time.Second,
 		GHTimeout:        4 * time.Second,
 		ScriptTimeout:    2 * time.Second,
 		WorkspaceTimeout: 6 * time.Second,
