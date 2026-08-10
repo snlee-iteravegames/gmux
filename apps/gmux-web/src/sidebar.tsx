@@ -17,7 +17,7 @@ import {
   updateProjects, reorderSessions, renameSession,
   peerStatusByName, isSessionUnavailable, localPeerNames, sessionDotState,
   unreadCount, localHostLabel, unresolvedHosts, duplicateSessionFiles,
-  type DotState,
+  health, peers, sessionStaleness, type DotState,
 } from './store'
 import { HostSuffix } from './host-suffix'
 import { FolderProbeMetadata } from './folder-probe'
@@ -85,9 +85,14 @@ interface DragState {
 // ── Components ──
 
 /** Rename is intentionally limited to reachable, currently-running pi
- * sessions. Dead/resumable and other adapter rows never expose the action. */
-export function canRenameSession(session: Pick<Session, 'alive' | 'kind'>, unavailable = false): boolean {
-  return session.alive && session.kind === 'pi' && !unavailable
+ * sessions on the current runner build. Older runners do not expose the
+ * reverse-control endpoint and must never present a button that can only fail. */
+export function canRenameSession(
+  session: Pick<Session, 'alive' | 'kind'>,
+  unavailable = false,
+  outdatedRunner = false,
+): boolean {
+  return session.alive && session.kind === 'pi' && !unavailable && !outdatedRunner
 }
 
 /** Container icon for a devcontainer session inside a mixed-host
@@ -157,7 +162,14 @@ function SessionItem({
   const [nameDraft, setNameDraft] = useState(session.title)
   const [savingName, setSavingName] = useState(false)
   const [renameError, setRenameError] = useState('')
-  const canRename = canRenameSession(session, unavailable)
+  const peerVersion = session.peer
+    ? peers.value.find(peer => peer.name === session.peer)?.version
+    : undefined
+  const renameCompareTarget = session.peer
+    ? (peerVersion ? { version: peerVersion } : null)
+    : health.value
+  const outdatedRunner = sessionStaleness(session, renameCompareTarget) !== null
+  const canRename = canRenameSession(session, unavailable, outdatedRunner)
 
   const cancelRename = () => {
     if (savingName) return
