@@ -14,6 +14,7 @@ describe('sidebar pi session rename availability', () => {
     expect(canRenameSession({ alive: true, kind: 'shell' })).toBe(false)
     expect(canRenameSession({ alive: true, kind: 'codex' })).toBe(false)
     expect(canRenameSession({ alive: true, kind: 'pi' }, true)).toBe(false)
+    expect(canRenameSession({ alive: true, kind: 'pi' }, false, true)).toBe(false)
   })
 })
 
