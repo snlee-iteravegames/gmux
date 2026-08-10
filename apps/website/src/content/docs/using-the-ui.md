@@ -7,7 +7,7 @@ Running `gmux open` opens the dashboard in a dedicated browser window. You can a
 
 ## The sidebar
 
-The left panel lists your sessions grouped into projects.
+The left panel lists your sessions grouped into projects. On desktop, drag its right edge to resize it. Focus the edge separator to resize with **Left/Right**, jump to the minimum or maximum with **Home/End**, or double-click it to restore the default width. gmux stores the chosen width in this browser. Touch layouts keep the fixed slide-out sidebar instead.
 
 ### Logo
 
@@ -69,6 +69,8 @@ Each session has a dot on the left edge:
 | **No dot** | Idle or waiting for input |
 
 Agent sessions (pi, Claude, Codex) only trigger the blue unread dot when the assistant completes a turn, not on every line of output.
+
+For a reachable, live Pi session on the current runner build, hover over its title to reveal the **pencil** button. Enter a new name and press **Enter** to save it through Pi's own session API; press **Escape** or move focus away to cancel. This changes the actual Pi conversation display name and the sidebar title, but leaves the session slug and bookmarkable URL unchanged. Dead sessions, other adapters, unreachable peers, and sessions still running an older gmux build do not show the button. Restart or resume an older runner with the current gmux build before renaming it.
 
 Hover over a session to reveal the **×** button. This dismisses the session: live runners are killed, the sidebar/project membership is removed, and persisted runtime metadata is dropped so the session does not come back as resumable. Use **Resume** from a dead session view only when you want to continue it.
 
