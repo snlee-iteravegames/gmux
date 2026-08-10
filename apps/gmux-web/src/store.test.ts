@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import {
   sessions, sessionsLoaded, worldLoaded, projects, upsertSession, removeSession,
-  markSessionRead, dismissSession, reorderSessions,
+  markSessionRead, dismissSession, reorderSessions, renameSession,
   handleActivity, isSessionActive, isSessionFading, activityMap,
   sessionStaleness, peers, peerAppearance, peerStatusByName,
   isSessionUnavailable, urlPath, urlSearch, filteredSessions, selectedId,
@@ -845,6 +845,13 @@ describe('pending mutations overlay', () => {
       expect(out.projects[0].sessions).toEqual(['y', 'x'])
     })
 
+    it('rename overlays only the targeted title', () => {
+      const sess = [makeSession({ id: 'a', title: 'old' }), makeSession({ id: 'b', title: 'other' })]
+      const out = applyPending(sess, [], [{ kind: 'rename', id: 'a', title: 'new', at: 0 }])
+      expect(out.sessions.map(s => s.title)).toEqual(['new', 'other'])
+      expect(sess[0].title).toBe('old')
+    })
+
     it('stacks multiple mutations in order', () => {
       const projs: ProjectItem[] = [{ slug: 'p', match: [], sessions: ['x'] }]
       const out = applyPending([], projs, [
@@ -897,6 +904,49 @@ describe('pending mutations overlay', () => {
         '/v1/peers/tower/v1/projects/gmux/sessions',
         expect.objectContaining({ method: 'PATCH' }),
       )
+    })
+
+    it('rename applies optimistic input, then the canonical response until SSE agrees', async () => {
+      _rawSessions.value = [makeSession({ id: 'a', title: 'old', kind: 'pi' })]
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ ok: true, data: { name: 'Canonical Name' } }),
+      } as Response)
+
+      const promise = renameSession('a', ' requested ')
+      expect(sessions.value[0].title).toBe('requested')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/v1/sessions/a/name', expect.objectContaining({
+        method: 'PUT', body: JSON.stringify({ name: 'requested' }),
+      }))
+      await expect(promise).resolves.toBe('Canonical Name')
+      expect(sessions.value[0].title).toBe('Canonical Name')
+      expect(_rawSessions.value[0].title).toBe('old')
+
+      _rawSessions.value = [makeSession({ id: 'a', title: 'Canonical Name', kind: 'pi' })]
+      expect(_pendingMutations.value).toHaveLength(0)
+    })
+
+    it('rename rolls back to authoritative raw title on failure', async () => {
+      _rawSessions.value = [makeSession({ id: 'a', title: 'old', kind: 'pi' })]
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce({
+        ok: false,
+        json: async () => ({ error: { message: 'Could not rename session' } }),
+      } as Response)
+
+      const promise = renameSession('a', 'new')
+      expect(sessions.value[0].title).toBe('new')
+      await expect(promise).rejects.toThrow('Could not rename session')
+      expect(sessions.value[0].title).toBe('old')
+      expect(_pendingMutations.value).toHaveLength(0)
+    })
+
+    it('rename rejects an empty trimmed name without mutating or fetching', async () => {
+      _rawSessions.value = [makeSession({ id: 'a', title: 'old', kind: 'pi' })]
+
+      await expect(renameSession('a', ' \t ')).rejects.toThrow('Session name is required')
+      expect(sessions.value[0].title).toBe('old')
+      expect(_pendingMutations.value).toHaveLength(0)
+      expect(globalThis.fetch).not.toHaveBeenCalled()
     })
 
     it('peer reorder does not add a local optimistic overlay', () => {

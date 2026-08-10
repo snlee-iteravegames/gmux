@@ -2,9 +2,12 @@ package ptyserver
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -270,6 +273,146 @@ func TestSessionSlugPrefersExplicitSlug(t *testing.T) {
 	check("id-fallback",
 		`{"op":"session","path":"/y.jsonl","id":"my-chat"}`,
 		"my-chat")
+}
+
+func TestTitleEventUpdatesStateImmediately(t *testing.T) {
+	st := session.New(session.Config{ID: "s1", Kind: "pi"})
+	st.SetSessionFile("/tmp/current.jsonl")
+	srv := &Server{state: st}
+
+	postTitle := func(body string) {
+		w := httptest.NewRecorder()
+		srv.handleHookEvent(w, httptest.NewRequest(http.MethodPost, "/hook/event", strings.NewReader(body)))
+		if w.Code != http.StatusNoContent {
+			t.Fatalf("status = %d, want 204", w.Code)
+		}
+	}
+
+	postTitle(`{"op":"title","path":"/tmp/old.jsonl","title":"stale title"}`)
+	if got := st.Title(); got != "" {
+		t.Fatalf("stale title changed state to %q", got)
+	}
+	postTitle(`{"op":"title","path":"/tmp/current.jsonl","title":"canonical title"}`)
+	if got := st.Title(); got != "canonical title" {
+		t.Fatalf("title = %q, want canonical title", got)
+	}
+}
+
+func TestRenameControlBrokerACKsCanonicalName(t *testing.T) {
+	const file = "/tmp/pi-session.jsonl"
+	st := session.New(session.Config{ID: "s1", Kind: "pi"})
+	st.SetSessionFile(file)
+	srv := &Server{state: st, adapter: adapters.NewPi()}
+
+	pollBody := `{"extension_instance":"ext-1","expected_session_file":"` + file + `"}`
+	pollDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		w := httptest.NewRecorder()
+		srv.handleControlNext(w, httptest.NewRequest(http.MethodPost, "/hook/control/next", strings.NewReader(pollBody)))
+		pollDone <- w
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		srv.controlMu.Lock()
+		ready := srv.controlWaiter != nil
+		srv.controlMu.Unlock()
+		if ready {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("control poll did not register")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	nameDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		w := httptest.NewRecorder()
+		body := `{"name":"requested","expected_session_file":"` + file + `"}`
+		srv.handlePutName(w, httptest.NewRequest(http.MethodPut, "/name", strings.NewReader(body)))
+		nameDone <- w
+	}()
+
+	poll := <-pollDone
+	if poll.Code != http.StatusOK {
+		t.Fatalf("poll status = %d, body=%s", poll.Code, poll.Body.String())
+	}
+	var command controlCommand
+	if err := json.NewDecoder(poll.Body).Decode(&command); err != nil {
+		t.Fatal(err)
+	}
+	if command.Op != "set_session_name" || command.Name != "requested" || command.ExtensionInstance != "ext-1" {
+		t.Fatalf("unexpected command: %+v", command)
+	}
+
+	result, _ := json.Marshal(controlResult{
+		ID: command.ID, ExtensionInstance: command.ExtensionInstance,
+		ExpectedSessionFile: command.ExpectedSessionFile, OK: true, Name: "canonical",
+	})
+	resultW := httptest.NewRecorder()
+	srv.handleControlResult(resultW, httptest.NewRequest(http.MethodPost, "/hook/control/result", bytes.NewReader(result)))
+	if resultW.Code != http.StatusNoContent {
+		t.Fatalf("result status = %d", resultW.Code)
+	}
+
+	nameW := <-nameDone
+	if nameW.Code != http.StatusOK {
+		t.Fatalf("name status = %d, body=%s", nameW.Code, nameW.Body.String())
+	}
+	if got := st.Title(); got != "canonical" {
+		t.Fatalf("state title = %q", got)
+	}
+	var response map[string]string
+	if err := json.NewDecoder(nameW.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response["name"] != "canonical" {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
+func TestRenameControlRejectsMismatchedACK(t *testing.T) {
+	const file = "/tmp/current.jsonl"
+	st := session.New(session.Config{ID: "s1", Kind: "pi"})
+	st.SetSessionFile(file)
+	pending := &controlPending{
+		id: "rename-1", instance: "ext-current", sessionFile: file,
+		result: make(chan controlResult, 1),
+	}
+	srv := &Server{state: st, controlPending: pending}
+	body := `{"id":"rename-1","extension_instance":"ext-stale","expected_session_file":"/tmp/current.jsonl","ok":true,"name":"wrong"}`
+	w := httptest.NewRecorder()
+	srv.handleControlResult(w, httptest.NewRequest(http.MethodPost, "/hook/control/result", strings.NewReader(body)))
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", w.Code)
+	}
+	if srv.controlPending != pending {
+		t.Fatal("mismatched ACK cleared the live pending command")
+	}
+	select {
+	case <-pending.result:
+		t.Fatal("mismatched ACK reached the pending requester")
+	default:
+	}
+}
+
+func TestRenameControlUnavailableAndStaleIdentity(t *testing.T) {
+	st := session.New(session.Config{ID: "s1", Kind: "pi"})
+	st.SetSessionFile("/tmp/current.jsonl")
+	srv := &Server{state: st, adapter: adapters.NewPi()}
+
+	for name, body := range map[string]string{
+		"no poll":    `{"name":"x","expected_session_file":"/tmp/current.jsonl"}`,
+		"stale file": `{"name":"x","expected_session_file":"/tmp/old.jsonl"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			srv.handlePutName(w, httptest.NewRequest(http.MethodPut, "/name", strings.NewReader(body)))
+			if w.Code != http.StatusServiceUnavailable && w.Code != http.StatusConflict {
+				t.Fatalf("status = %d, want bounded unavailable/conflict", w.Code)
+			}
+		})
+	}
 }
 
 // TestApplyTurnEnd pins the outcome→sidebar-state policy directly (no node).

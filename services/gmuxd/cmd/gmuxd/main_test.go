@@ -36,6 +36,69 @@ func (a discoverTestAdapter) Launchers() []adapter.Launcher {
 	return []adapter.Launcher{{ID: a.name, Label: a.name}}
 }
 
+func TestValidateSessionName(t *testing.T) {
+	valid200 := strings.Repeat("é", 100) // 200 UTF-8 bytes
+	cases := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{"unicode trim", "\u2003 hello 世界 \u2003", "hello 世界", false},
+		{"max bytes", valid200, valid200, false},
+		{"empty", " \t\n", "", true},
+		{"too many bytes", valid200 + "x", "", true},
+		{"nul", "a\x00b", "", true},
+		{"c0", "a\x1fb", "", true},
+		{"del", "a\x7fb", "", true},
+		{"newline", "a\nb", "", true},
+		{"carriage return", "a\rb", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := validateSessionName(tc.input)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSessionRenameAvailable(t *testing.T) {
+	base := store.Session{Alive: true, Kind: "pi", SocketPath: "/tmp/runner.sock", SessionFile: "/tmp/pi.jsonl"}
+	if !sessionRenameAvailable(base) {
+		t.Fatal("live pi session with socket and file should be renameable")
+	}
+	cases := map[string]store.Session{
+		"dead":           base,
+		"non-pi":         base,
+		"no socket":      base,
+		"no active file": base,
+	}
+	dead := cases["dead"]
+	dead.Alive = false
+	cases["dead"] = dead
+	nonPi := cases["non-pi"]
+	nonPi.Kind = "shell"
+	cases["non-pi"] = nonPi
+	noSocket := cases["no socket"]
+	noSocket.SocketPath = ""
+	cases["no socket"] = noSocket
+	noFile := cases["no active file"]
+	noFile.SessionFile = ""
+	cases["no active file"] = noFile
+	for name, sess := range cases {
+		t.Run(name, func(t *testing.T) {
+			if sessionRenameAvailable(sess) {
+				t.Fatal("session should not be renameable")
+			}
+		})
+	}
+}
+
 func TestDiscoverAvailableAdaptersRunsAll(t *testing.T) {
 	available := discoverAvailableAdapters([]adapter.Adapter{
 		discoverTestAdapter{name: "pi", available: true},

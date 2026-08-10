@@ -5,6 +5,7 @@
 package discovery
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -357,4 +358,36 @@ func SendInput(ctx context.Context, socketPath string, body io.Reader) error {
 		return fmt.Errorf("runner /input: %s: %s", resp.Status, strings.TrimSpace(string(msg)))
 	}
 	return nil
+}
+
+// RenameSession asks a runner's reverse-control broker to call the active pi
+// process's session-name API. expectedSessionFile prevents a request issued for
+// one conversation from being applied after an in-process session switch.
+// The returned name is pi's canonical getter value after the setter ACK.
+func RenameSession(ctx context.Context, socketPath, name, expectedSessionFile string) (string, error) {
+	payload, err := json.Marshal(map[string]string{
+		"name": name, "expected_session_file": expectedSessionFile,
+	})
+	if err != nil {
+		return "", err
+	}
+	resp, err := runnerRequest(ctx, socketPath, http.MethodPut, "/name", bytes.NewReader(payload))
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return "", fmt.Errorf("runner /name: %s: %s", resp.Status, strings.TrimSpace(string(msg)))
+	}
+	var result struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&result); err != nil {
+		return "", fmt.Errorf("runner /name: invalid response: %w", err)
+	}
+	if result.Name == "" {
+		return "", fmt.Errorf("runner /name: empty canonical name")
+	}
+	return result.Name, nil
 }

@@ -2,25 +2,13 @@
 // ----------------------------------------------------------------------------
 // The authoritative source of session state for pi. pi knows exactly which
 // conversation it holds and what it's doing; this hook forwards that to the
-// gmux runner so attribution, title, and status are all push-based and exact
-// — no fs-syscall inference, no scrollback matching.
+// gmux runner so attribution, title, and status are all push-based and exact.
 //
-// How it gets loaded (set by the gmux runner when it spawns pi):
-//   pi -e /abs/path/pi-ext.mjs          (extensions accumulate; coexists with
-//                                         the user's own -e extensions)
-//
-// Socket: GMUX_SESSION_SOCK, set by the runner.
-//
-// Events posted to POST /hook/event on the runner socket:
-//   { op: "session", path, id, name, cwd, reason }      on bind (session_start)
-//   { op: "turn", phase: "start" }                       on agent loop start
-//   { op: "turn", phase: "end", outcome, title }         on agent loop end
-// outcome is pi's terminal state normalized to a stable vocabulary
-// ("completed" | "aborted" | "error"); the runner owns what each means for the
-// sidebar (e.g. completed → unread). The extension reports pi facts, not gmux
-// policy.
-//
-// It is fire-and-forget: a failed POST never throws back into pi.
+// The runner also exposes an owner-only reverse-control broker on the same
+// Unix socket. A control loop exists only while a pi session is active. Rename
+// commands are applied through pi's extension API (never through PTY input) and
+// are guarded by both the extension instance and active session-file identity.
+// All transport failures are swallowed: gmux must never break pi.
 // ----------------------------------------------------------------------------
 
 import { createRequire } from "node:module";
@@ -32,10 +20,9 @@ export default function (pi) {
   const sock = process.env.GMUX_SESSION_SOCK;
   if (!sock) return; // not launched by gmux → no-op
 
-  // --- session identity: which conversation pi is bound to ----------------
-  // getSessionFile() is the resolved absolute path of the active conversation,
-  // or undefined for a brand-new session whose file isn't written yet (the
-  // first agent_end below picks it up once it exists).
+  let activeControl;
+  let instanceSeq = 0;
+
   function reportSession(reason, ctx) {
     let file, id, name, cwd;
     try {
@@ -47,21 +34,39 @@ export default function (pi) {
     } catch {
       return;
     }
-    if (!file) return; // nothing to attribute yet
+    if (!file) return;
     post(sock, { op: "session", path: String(file), id, name, cwd, reason });
   }
 
-  // session_start is the one authoritative bind event: pi fires it on startup
-  // AND on every switch/new/resume/fork (each preceded by session_shutdown of
-  // the old session), carrying the new file and a reason of
-  // startup | new | resume | fork. This is what catches a cache-served
-  // /resume-select, where no file is read for an fs probe to observe.
-  pi.on("session_start", (ev, ctx) => reportSession(ev?.reason ?? "start", ctx));
+  // session_start is authoritative for both bind reporting and control-loop
+  // ownership. session_shutdown aborts the outstanding long poll before pi can
+  // bind another conversation, so a stale command cannot rename the new one.
+  pi.on("session_start", (ev, ctx) => {
+    reportSession(ev?.reason ?? "start", ctx);
+    activeControl?.abort();
+    const controller = new AbortController();
+    const instance = `${process.pid}-${Date.now()}-${++instanceSeq}`;
+    const token = { controller, instance, ctx };
+    activeControl = { abort: () => controller.abort(), token };
+    void controlLoop(sock, pi, token, () => activeControl?.token === token);
+  });
 
-  // --- turn lifecycle: drive the sidebar busy/idle without parsing the file -
-  // pi's agent loop bounds map onto the sidebar's working/idle; agent_end
-  // carries the final messages so we read the terminal stopReason off-disk and
-  // normalize it. The runner decides what each outcome means for the sidebar.
+  pi.on("session_shutdown", () => {
+    activeControl?.abort();
+    activeControl = undefined;
+  });
+
+  // pi emits this when its canonical display metadata changes (including
+  // setSessionName). Report the getter value rather than trusting event shape.
+  pi.on("session_info_changed", (_ev, ctx) => {
+    let title, file;
+    try {
+      title = pi.getSessionName();
+      file = ctx.sessionManager.getSessionFile();
+    } catch {}
+    if (title && file) post(sock, { op: "title", title: String(title), path: String(file) });
+  });
+
   pi.on("agent_start", () => post(sock, { op: "turn", phase: "start" }));
 
   pi.on("agent_end", (ev, ctx) => {
@@ -74,18 +79,121 @@ export default function (pi) {
       }
     }
     let name;
-    try {
-      name = ctx.sessionManager.getSessionName();
-    } catch {}
-    // Normalize pi's stopReason to a stable outcome vocabulary:
-    //   stop  → completed (turn finished on its own)
-    //   error → error     (pi exhausted retries and gave up)
-    //   else  → aborted   (user Esc, or any other non-completion)
+    try { name = ctx.sessionManager.getSessionName(); } catch {}
     const outcome =
       stopReason === "stop" ? "completed" : stopReason === "error" ? "error" : "aborted";
     post(sock, { op: "turn", phase: "end", outcome, title: name || undefined });
-    // A brand-new session's file exists by now; make sure it's attributed.
     reportSession("activity", ctx);
+  });
+}
+
+async function controlLoop(socketPath, pi, token, isActive) {
+  const { controller, instance, ctx } = token;
+  while (!controller.signal.aborted && isActive()) {
+    let expectedSessionFile;
+    try { expectedSessionFile = ctx.sessionManager.getSessionFile(); } catch {}
+    if (!expectedSessionFile) {
+      await delay(100, controller.signal);
+      continue;
+    }
+
+    let command;
+    try {
+      command = await requestJSON(socketPath, "/hook/control/next", "POST", {
+        extension_instance: instance,
+        expected_session_file: String(expectedSessionFile),
+      }, controller.signal);
+    } catch {
+      if (!controller.signal.aborted) await delay(100, controller.signal);
+      continue;
+    }
+    if (!command || command.op !== "set_session_name") continue;
+
+    const result = {
+      id: command.id,
+      extension_instance: instance,
+      expected_session_file: command.expected_session_file,
+      ok: false,
+    };
+    try {
+      if (!isActive() || command.extension_instance !== instance) {
+        throw new Error("stale extension instance");
+      }
+      const current = ctx.sessionManager.getSessionFile();
+      if (!current || String(current) !== command.expected_session_file) {
+        throw new Error("session changed");
+      }
+      // These calls intentionally remain synchronous: the runner responds to
+      // the user only after this setter ACK and returns the canonical getter.
+      pi.setSessionName(command.name);
+      const canonical = pi.getSessionName();
+      if (!canonical) throw new Error("name was not applied");
+      result.ok = true;
+      result.name = String(canonical);
+    } catch (err) {
+      result.error = err instanceof Error ? err.message : "rename failed";
+    }
+
+    try {
+      await requestJSON(socketPath, "/hook/control/result", "POST", result, controller.signal);
+    } catch {
+      // Transport errors are never allowed to surface into pi.
+    }
+  }
+}
+
+function requestJSON(socketPath, path, method, payload, signal) {
+  return new Promise((resolve, reject) => {
+    let req;
+    const onAbort = () => req?.destroy(new Error("aborted"));
+    try {
+      const body = Buffer.from(JSON.stringify(payload), "utf8");
+      req = http.request({
+        socketPath,
+        path,
+        method,
+        headers: { "content-type": "application/json", "content-length": body.length },
+      }, (res) => {
+        const chunks = [];
+        res.on("data", (chunk) => chunks.push(chunk));
+        res.on("end", () => {
+          signal?.removeEventListener("abort", onAbort);
+          if ((res.statusCode ?? 500) >= 300) {
+            reject(new Error(`runner returned ${res.statusCode}`));
+            return;
+          }
+          const raw = Buffer.concat(chunks).toString("utf8");
+          if (!raw) { resolve(undefined); return; }
+          try { resolve(JSON.parse(raw)); } catch (err) { reject(err); }
+        });
+      });
+      req.on("error", (err) => {
+        signal?.removeEventListener("abort", onAbort);
+        reject(err);
+      });
+      if (signal?.aborted) onAbort();
+      else signal?.addEventListener("abort", onAbort, { once: true });
+      req.end(body);
+    } catch (err) {
+      signal?.removeEventListener("abort", onAbort);
+      reject(err);
+    }
+  });
+}
+
+function delay(ms, signal) {
+  return new Promise((resolve) => {
+    if (signal?.aborted) { resolve(); return; }
+    const finish = () => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      finish();
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -98,7 +206,7 @@ function post(socketPath, event) {
       method: "POST",
       headers: { "content-type": "application/json", "content-length": body.length },
     });
-    req.on("error", () => {}); // never surface transport errors into pi
+    req.on("error", () => {});
     req.end(body);
   } catch {
     // swallow — the extension must never break pi
