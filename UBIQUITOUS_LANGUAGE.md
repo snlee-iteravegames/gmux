@@ -5,8 +5,9 @@
 | Term                | Definition                                                                                                | Aliases to avoid          |
 | ------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------- |
 | **Session**         | The user-facing unit of work in a directory: a terminal pane plus everything we know about it             | Pane, terminal, tab       |
-| **Conversation**    | An agent's own thread of dialogue (pi/claude/codex's "session"), identified by its on-disk file path. The path (= **Tool ID**) is immutable; the conversation's display name (slug) is mutable. A tool-backed **Session** corresponds to a Conversation; a **Runner** binds to one and may rebind (`/resume`) to another | Agent session, thread     |
-| **Slug**            | A session's mutable, human-readable display name; persistent across runner restarts and resume, but renamable. Not identity (the immutable Tool ID is) | Name                      |
+| **Conversation**    | An agent's own thread of dialogue (pi/claude/codex's "session"), identified by its on-disk file path. The path (= **Tool ID**) is immutable; the tool may expose a mutable display **Title**. A tool-backed **Session** corresponds to a Conversation; a **Runner** binds to one and may rebind (`/resume`) to another | Agent session, thread     |
+| **Title**           | The current human-readable label shown in the sidebar, resolved from adapter or shell metadata. For Pi, user rename changes Pi's own conversation name and therefore this Title; it does not change the Slug or URL | Name (when identity is meant) |
+| **Slug**            | A session's mutable, URL-safe routing and project-membership key; persistent across runner restarts and resume, but distinct from the displayed Title and immutable Tool ID | Display name              |
 | **Session ID**      | A specific runner instance's identifier; ephemeral for shell, stable (= tool ID) for pi/claude            | Identifier (alone is too generic) |
 | **Key**             | The single string projects.json uses per session: slug if attributed, session ID otherwise                |                           |
 | **Tool ID**         | An adapter-managed file identifier (e.g. JSONL filename) used as session ID for tool-backed sessions      |                           |
@@ -81,7 +82,7 @@ The four stores have orthogonal concerns. Mixing them is a smell:
 
 ## Relationships
 
-- A **Session** has exactly one **Slug** (after Attribution) and one **Session ID**.
+- A **Session** has one current **Title**, exactly one **Slug** (after Attribution), and one **Session ID**.
 - A **Slug** is identity; a **Session ID** is instance. Over time a single **Slug** in a project may host multiple **Session IDs** (e.g., dismiss, then re-run in the same cwd).
 - **Projects.json** stores **Keys**, never `(id, slug)` pairs: the **Key** is the slug if attributed, the ID otherwise.
 - **Sessionmeta** is keyed by **Session ID** and is the SOT for runtime fields. **Projects.json** is keyed by project slug and is the SOT for sidebar membership.
@@ -110,7 +111,7 @@ The four stores have orthogonal concerns. Mixing them is a smell:
 
 - **"Session"** is used colloquially for the in-memory record, the runner process, the user's mental model, and the on-disk meta.json. Prefer **Session** for the conceptual entity, **Runner** for the process, **Sessionmeta** for the on-disk record, **Store entry** for the in-memory record.
 
-- **"Slug"** appears in two scopes: **Project slug** (a project's identifier in projects.json) and **session Slug** (a session's identity). When ambiguous, qualify: "project slug" vs "session slug".
+- **"Slug"** appears in two scopes: **Project slug** (a project's identifier in projects.json) and **session Slug** (a session's identity). When ambiguous, qualify: "project slug" vs "session slug". A session **Title** is display metadata, not either kind of slug; renaming a Pi Title does not move the session or change its URL.
 
 - **"Restart"** has been used both for the explicit `restart` action (kill + resume) and informally for "resume". Prefer **Restart** only for the kill-then-resume operation; **Resume** for spawning a runner from a dead session.
 

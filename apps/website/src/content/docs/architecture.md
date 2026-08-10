@@ -13,6 +13,7 @@ One per session. It:
 - Owns the live session state (title, status, working flag)
 - Persists PTY output to an on-disk scrollback file for session replay on reconnect
 - Exposes the session on a Unix socket (metadata, events, terminal attach)
+- Relays supported reverse-control requests to an active agent hook without writing commands into the PTY
 - Runs adapter logic over child output
 
 `gmux` is the source of truth for a live session.
@@ -26,7 +27,7 @@ One per machine. It:
 - Watches adapter session files (e.g. pi's JSONL conversations)
 - Serves the REST API, SSE event stream, and WebSocket proxy
 - Serves the embedded web frontend as a SPA
-- Manages session launch, kill, dismiss, and resume
+- Manages session launch, kill, dismiss, resume, and supported agent metadata changes
 - Optionally connects to other gmuxd instances (peers) and aggregates their sessions into a single UI (see [Multi-Machine](/multi-machine/))
 
 `gmuxd` is stateless — if it restarts, it rediscovers running sessions. On startup it hashes the `gmux` binary it ships with; sessions running a different build are marked **stale** so the UI can flag them.
@@ -75,6 +76,8 @@ graph LR
 
 Each `gmux` runner exposes its session on a Unix socket. `gmuxd` discovers these sockets, subscribes to each runner's event stream for live updates, and proxies everything to the browser. When you click a session, the browser opens a WebSocket that gmuxd proxies to the runner's socket, so terminal I/O flows end-to-end.
 
+Pi session renaming travels in the reverse direction: the browser sends `PUT /v1/sessions/{id}/name`, the owning daemon forwards it to that runner, and the runner delivers a session-file-scoped control request to the injected Pi extension. The extension calls `pi.setSessionName()` and acknowledges Pi's canonical `pi.getSessionName()` value before the HTTP request succeeds. No `/name` text is injected into the PTY. Extension-instance and session-file checks reject stale requests during reload or conversation switching; the UI also hides the action for a runner built from an older gmux binary. See [the runner hook protocol](https://github.com/gmuxapp/gmux/blob/main/docs/runner-hook-protocol.md) for the internal wire contract.
+
 ## Scrollback replay
 
 Two distinct mechanisms back replay, and they should not be conflated:
@@ -98,6 +101,7 @@ Served by `gmuxd` on a Unix socket (local IPC) and a TCP listener (default `127.
 | `POST /v1/sessions/{id}/kill` | Kill a session |
 | `POST /v1/sessions/{id}/dismiss` | Kill + remove |
 | `POST /v1/sessions/{id}/resume` | Resume a resumable session |
+| `PUT /v1/sessions/{id}/name` | Rename a reachable, live Pi conversation through Pi's session API |
 | `GET /v1/events` | SSE: `snapshot.sessions`, `snapshot.world`, `session-activity` (ADR 0001) |
 | `/v1/peers/{peer}/...` | Forward an allowlisted write to a peer (ADR 0002) |
 | `GET /v1/health` | Daemon health, version, launchers, peer status |

@@ -116,6 +116,7 @@ Sessions are grouped into **folders** by working directory. Each folder heading 
 - **Bounded persisted scrollback** — up to roughly 2 MiB per runner replays on reconnect and remains available after runner exit
 - **Reliable switching** — DEC 2026 synchronized output, connection ownership checks, and serialized writes prevent stale data from the previous session from clearing or contaminating the new terminal
 - **Session lifecycle** — live status, exit codes, kill from the UI
+- **Pi session naming** — rename a live Pi conversation from the sidebar through Pi's own session API, without injecting terminal input or changing its URL
 - **Reconnecting** — tab away and return to the live terminal with bounded history replayed when a reconnect is needed
 
 ### Adapters — session-level intelligence
@@ -150,6 +151,7 @@ graph TD
 
 ### UI
 - **Triage-first sidebar** — within each folder, unread sessions come first, then errors, working sessions, and idle or resumable sessions
+- **Resizable desktop sidebar** — drag the sidebar's right edge, use its keyboard-accessible separator, or double-click to reset; the width persists locally
 - **Automatic folders** — unstamped sessions sharing a normalized workspace root (or cwd) on the same origin host group automatically, without changing `projects.json`
 - **Selected-session header** — contextual metadata and actions stay visible for the selected terminal
 - **Mobile responsive** — the same scoped URL works on desktop or phone for selecting a session and sending input
