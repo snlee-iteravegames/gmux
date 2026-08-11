@@ -32,7 +32,9 @@ One per machine. It:
 
 `gmuxd` is stateless — if it restarts, it rediscovers running sessions. On startup it hashes the `gmux` binary it ships with; sessions running a different build are marked **stale** so the UI can flag them.
 
-`gmux` auto-starts `gmuxd` if it isn't already running. If a daemon from an older version is detected, `gmux` automatically replaces it so the child process always talks to a compatible daemon.
+`gmuxd` acquires a non-blocking singleton lock before it performs discovery or cleanup. It must own both daemon listeners before it scans runner sockets, and it removes a socket only when the operating system proves that no listener owns it. Permission failures, timeouts, and other ambiguous probe errors preserve the socket. These invariants prevent a sandboxed or concurrently started daemon from unlinking the live daemon or runner sockets.
+
+`gmux` auto-starts `gmuxd` only when the daemon socket is missing or refuses connections. It deliberately refuses automatic startup when health cannot be verified, such as an `EPERM` result from a sandbox. If a reachable daemon from an older version is detected, `gmux` automatically replaces it so the child process always talks to a compatible daemon.
 
 Configuration lives in `~/.config/gmux/host.toml`. See [Configuration](/configuration) for the full file layout, or [Security](/security) and [Remote Access](/remote-access) for details on those topics.
 
@@ -107,5 +109,4 @@ Served by `gmuxd` on a Unix socket (local IPC) and a TCP listener (default `127.
 | `GET /v1/health` | Daemon health, version, launchers, peer status |
 | `WS /ws/{id}` | Terminal WebSocket proxy |
 | `GET /` | Embedded web UI (SPA) |
-
 

@@ -37,11 +37,22 @@ This runs the daemon in the foreground so you can see errors directly. Use `gmux
 
 After updating gmux, sessions that were started with the old version show an **outdated** tag. The session still works, but the runner binary doesn't match the daemon. Kill and relaunch the session to pick up the new version.
 
-## WebSocket disconnects / terminal goes blank
+## "Connection lost, reconnecting…" / terminal goes blank
 
 - **gmuxd restarted.** The browser reconnects automatically when gmuxd comes back. If the terminal stays blank, refresh the page.
 - **Network interruption** (remote access). The SSE event stream reconnects within a few seconds. If the terminal doesn't recover, the session's runner process may have exited while disconnected.
 - **Laptop sleep/resume.** The browser re-establishes connections on wake. Give it a moment; if sessions are missing, gmuxd may have been stopped by the OS.
+
+If the banner remains, check the daemon from a normal host shell:
+
+```bash
+gmux daemon status
+cat "$(gmux daemon log-path)"
+```
+
+Do not start a second foreground daemon just because a sandboxed command reports `operation not permitted`. A sandbox may be unable to access the daemon's Unix socket even while the daemon is healthy. Current gmux releases refuse automatic startup on permission errors and other ambiguous failures; they only auto-start when the socket is missing or has no listener.
+
+gmuxd also takes a singleton lock before discovery and never blindly unlinks an existing daemon or runner socket. If the log reports that another gmuxd owns the lock, use the existing daemon or stop it deliberately with `gmux daemon stop` before restarting it.
 
 ## Ctrl+V pastes `^V` instead of clipboard
 
@@ -70,3 +81,5 @@ After updating, the old daemon is replaced automatically:
 - **Manual installs**: the next `gmux` invocation detects the version mismatch and replaces the daemon
 
 To force a restart manually: `gmux daemon restart` (or just `gmux daemon start`, which replaces any running instance).
+
+Existing runners keep their conversations and continue running across a daemon replacement. They may show an **outdated** badge until each session is relaunched with the new `gmux` binary; see [the outdated session note](#outdated-badge-on-a-session).
