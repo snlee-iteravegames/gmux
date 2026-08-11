@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -123,6 +127,29 @@ func TestGmuxdNeedsStart_DevStartsWhenNotRunning(t *testing.T) {
 
 	if !gmuxdNeedsStart() {
 		t.Error("expected true for dev build when daemon is not running")
+	}
+}
+
+func TestDaemonUnavailableOnlyAcceptsProvenAbsence(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "missing", err: os.ErrNotExist, want: true},
+		{name: "refused", err: syscall.ECONNREFUSED, want: true},
+		{name: "permission", err: os.ErrPermission, want: false},
+		{name: "operation-not-permitted", err: syscall.EPERM, want: false},
+		{name: "timeout", err: context.DeadlineExceeded, want: false},
+		{name: "wrapped-permission", err: fmt.Errorf("dial: %w", syscall.EPERM), want: false},
+		{name: "other", err: errors.New("unexpected"), want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := daemonUnavailable(tt.err); got != tt.want {
+				t.Fatalf("daemonUnavailable(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
 	}
 }
 

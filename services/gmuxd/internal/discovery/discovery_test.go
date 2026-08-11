@@ -1,16 +1,42 @@
 package discovery
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 )
+
+func TestStaleSocketErrorOnlyAcceptsProvenAbsence(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "missing", err: os.ErrNotExist, want: true},
+		{name: "refused", err: syscall.ECONNREFUSED, want: true},
+		{name: "permission", err: os.ErrPermission, want: false},
+		{name: "operation-not-permitted", err: syscall.EPERM, want: false},
+		{name: "timeout", err: context.DeadlineExceeded, want: false},
+		{name: "other", err: errors.New("unexpected"), want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := staleSocketError(tt.err); got != tt.want {
+				t.Fatalf("staleSocketError(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
 
 // TestScanReregistersDeadButAliveRunnerAfterDaemonRestart pins the
 // dead→alive reconciliation contract that Sweep's docstring promises:
@@ -271,5 +297,3 @@ func TestScanReregistersOnTransientSubscriptionDrop(t *testing.T) {
 		t.Errorf("Pid = %d, want 99 (re-registration must refresh runtime fields)", got.Pid)
 	}
 }
-
-

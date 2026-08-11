@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net"
@@ -56,20 +57,46 @@ func ensureGmuxd() bool {
 
 // gmuxdNeedsStart checks the running daemon.
 func gmuxdNeedsStart() bool {
-	// "dev" builds never replace — avoids churn during development.
-	if version == "dev" {
-		return !gmuxdHealthy(500 * time.Millisecond)
+	runningVersion, healthy, err := gmuxdHealth(500 * time.Millisecond)
+	if err != nil {
+		if daemonUnavailable(err) {
+			return true
+		}
+		log.Printf("warning: cannot verify gmuxd health (%v); refusing automatic start", err)
+		return false
+	}
+	if !healthy {
+		log.Printf("warning: gmuxd socket is reachable but unhealthy; refusing automatic start")
+		return false
 	}
 
+	// "dev" builds never replace — avoids churn during development.
+	if version == "dev" {
+		return false
+	}
+
+	// Same version: no action needed. Different version: replace.
+	return runningVersion != version
+}
+
+// daemonUnavailable reports only errors that prove there is no listener at
+// the daemon socket. Permission errors, timeouts, and other ambiguous failures
+// must never trigger an automatic second daemon: a sandboxed caller can be
+// unable to reach a healthy daemon even though that daemon is still running.
+func daemonUnavailable(err error) bool {
+	return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED)
+}
+
+func gmuxdHealth(timeout time.Duration) (runningVersion string, healthy bool, err error) {
 	client := gmuxdClient()
-	client.Timeout = 500 * time.Millisecond
+	client.Timeout = timeout
 	resp, err := client.Get(gmuxdBaseURL() + "/v1/health")
 	if err != nil {
-		return true // not running
+		return "", false, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return true // not healthy
+		return "", false, nil
 	}
 
 	var health struct {
@@ -79,11 +106,9 @@ func gmuxdNeedsStart() bool {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	if json.Unmarshal(body, &health) != nil {
-		return false // can't parse, leave it alone
+		return "", true, nil // healthy but unparsable; leave it alone
 	}
-
-	// Same version: no action needed. Different version: replace.
-	return health.Data.Version != version
+	return health.Data.Version, true, nil
 }
 
 // findGmuxdBin locates the gmuxd binary: sibling first, then PATH.

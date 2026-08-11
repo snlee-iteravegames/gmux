@@ -18,6 +18,7 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/peering"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/probes"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/projects"
+	"github.com/gmuxapp/gmux/services/gmuxd/internal/snapshot"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/unixipc"
 )
@@ -741,6 +742,19 @@ func TestComposePeerDirectoryProbesSeparatesCurrentPeerKeysAndSkipsLocal(t *test
 	}
 	if branch := got["laptop"]["/same/path"].Git.Branch; branch != "laptop" {
 		t.Fatalf("laptop branch = %q, want laptop", branch)
+	}
+}
+
+func TestComposePeerDirectoryProbesPayloadOmitsEmptyMap(t *testing.T) {
+	payload := snapshot.WorldPayload{
+		PeerDirectoryProbes: composePeerDirectoryProbesPayload(nil),
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte(`"peer_directory_probes"`)) {
+		t.Fatalf("empty peer directory probes were not omitted: %s", encoded)
 	}
 }
 

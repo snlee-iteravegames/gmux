@@ -10,6 +10,13 @@ import (
 	"github.com/gmuxapp/gmux/services/gmuxd/internal/store"
 )
 
+func requireWaitingForInput(t *testing.T, status *store.Status) {
+	t.Helper()
+	if status == nil || status.Label != "Waiting for input" || status.Working || status.Error {
+		t.Fatalf("expected waiting-for-input status, got %+v", status)
+	}
+}
+
 func TestNotifyNewSessionDoesNotStealTitleFromOldPiFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -427,9 +434,7 @@ func TestPiFullLifecycle(t *testing.T) {
 		`{"type":"message","id":"a4","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"Done."}]}}`,
 	)
 	sess, _ = s.Get("sess-pi")
-	if sess.Status != nil {
-		t.Fatalf("expected idle after stop, got %+v", sess.Status)
-	}
+	requireWaitingForInput(t, sess.Status)
 
 	// 6. Second turn.
 	simulateFileWrite(t, fm, "sess-pi", path,
@@ -491,9 +496,7 @@ func TestPiExhaustedErrorRecovery(t *testing.T) {
 		`{"type":"message","id":"a5","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"Done."}]}}`,
 	)
 	sess, _ = s.Get("sess-pi")
-	if sess.Status != nil {
-		t.Fatalf("expected nil status after stop, got %+v", sess.Status)
-	}
+	requireWaitingForInput(t, sess.Status)
 }
 
 func TestReadAllSuppressesUnread(t *testing.T) {
@@ -1045,9 +1048,7 @@ func TestClaudeAbortClearsWorking(t *testing.T) {
 		`{"type":"assistant","sessionId":"abc","message":{"role":"assistant","content":[{"type":"text","text":"I was..."}],"stop_reason":"stop_sequence"},"uuid":"a2"}`,
 	)
 	sess, _ = s.Get("sess-claude")
-	if sess.Status != nil {
-		t.Fatalf("expected nil status (idle) after abort, got %+v", sess.Status)
-	}
+	requireWaitingForInput(t, sess.Status)
 }
 
 func TestClaudeFullLifecycle(t *testing.T) {
@@ -1095,9 +1096,7 @@ func TestClaudeFullLifecycle(t *testing.T) {
 		`{"type":"assistant","sessionId":"abc","message":{"role":"assistant","content":[{"type":"text","text":"Done."}],"stop_reason":"end_turn"},"uuid":"a4"}`,
 	)
 	sess, _ = s.Get("sess-claude")
-	if sess.Status != nil {
-		t.Fatalf("expected idle after end_turn, got %+v", sess.Status)
-	}
+	requireWaitingForInput(t, sess.Status)
 
 	// 6. Second turn.
 	simulateFileWrite(t, fm, "sess-claude", path,
@@ -1113,9 +1112,7 @@ func TestClaudeFullLifecycle(t *testing.T) {
 		`{"type":"assistant","sessionId":"abc","message":{"role":"assistant","content":[{"type":"text","text":"I was..."}],"stop_reason":"stop_sequence"},"uuid":"a5"}`,
 	)
 	sess, _ = s.Get("sess-claude")
-	if sess.Status != nil {
-		t.Fatalf("expected idle after stop_sequence, got %+v", sess.Status)
-	}
+	requireWaitingForInput(t, sess.Status)
 }
 
 func TestClaudeCustomTitleDuringWorkPreservesStatus(t *testing.T) {
@@ -1235,9 +1232,7 @@ func TestCodexFullLifecycle(t *testing.T) {
 		`{"type":"event_msg","payload":{"type":"task_complete"}}`,
 	)
 	sess, _ = s.Get("sess-codex")
-	if sess.Status != nil {
-		t.Fatalf("expected idle after task_complete, got %+v", sess.Status)
-	}
+	requireWaitingForInput(t, sess.Status)
 
 	// 4. Second turn.
 	simulateFileWrite(t, fm, "sess-codex", path,

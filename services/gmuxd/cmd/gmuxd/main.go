@@ -462,6 +462,14 @@ func startBackground(stdout, stderr io.Writer) int {
 }
 
 func serve(stderr io.Writer) int {
+	stateDir := paths.StateDir()
+	daemonLock, err := unixipc.AcquireDaemonLock(stateDir)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "gmuxd: %v\n", err)
+		return 1
+	}
+	defer daemonLock.Close()
+
 	gmuxBin := resolveGmux() // resolve once, use everywhere
 	if gmuxBin != "" {
 		log.Printf("gmux: %s", gmuxBin)
@@ -566,12 +574,6 @@ func serve(stderr io.Writer) int {
 	go fileMon.Run(stopFileMon)
 	defer close(stopFileMon)
 
-	// Start socket-based discovery (scans paths.SessionSocketDir() for *.sock)
-	// Discovery also subscribes to each runner's /events SSE for live updates.
-	stopDiscovery := make(chan struct{})
-	go discovery.Watch(sessions, subs, fileMon, persistDead, nil, 3*time.Second, stopDiscovery)
-	defer close(stopDiscovery)
-
 	// Session file scanner — discovers resumable sessions from adapter
 	// session files (e.g. pi's JSONL conversations). Also purges stale
 	// dead sessions that were never attributed to a file. Started below
@@ -630,8 +632,8 @@ func serve(stderr io.Writer) int {
 	var tcpAddr string
 	var authToken string
 
-	// State directory for persistent files (projects.json, auth-token, etc).
-	stateDir := paths.StateDir()
+	// stateDir and the singleton daemon lock were initialized before any
+	// discovery or cleanup work at the top of serve.
 
 	// Stable, opaque per-node identity (ADR 0007). Generated once and
 	// persisted alongside the auth token; used for peer dedup, never
@@ -1972,7 +1974,7 @@ func serve(stderr io.Writer) int {
 				PeerProjects:        composePeerProjects(peerManager),
 				PeerDiscovered:      composePeerDiscovered(peerManager),
 				DirectoryProbes:     directoryProbesForState(state),
-				PeerDirectoryProbes: composePeerDirectoryProbes(peerManager),
+				PeerDirectoryProbes: composePeerDirectoryProbesPayload(peerManager),
 			}
 		}
 
@@ -2134,6 +2136,13 @@ func serve(stderr io.Writer) int {
 	if err != nil {
 		log.Fatalf("FATAL: tcp listener on %s: %v", tcpAddr, err)
 	}
+
+	// Start runner discovery only after this process owns both daemon
+	// listeners. A duplicate daemon that cannot acquire either listener must
+	// never probe or clean up another daemon's live runner sockets.
+	stopDiscovery := make(chan struct{})
+	go discovery.Watch(sessions, subs, fileMon, persistDead, nil, 3*time.Second, stopDiscovery)
+	defer close(stopDiscovery)
 
 	log.Printf("tcp listener on %s (token-authenticated)", tcpAddr)
 	go func() {
@@ -2426,6 +2435,19 @@ func composePeerDirectoryProbes(mgr *peering.Manager) map[string]map[string]prob
 		out[info.Name] = remote
 	}
 	return out
+}
+
+// composePeerDirectoryProbesPayload avoids storing a typed nil map in the
+// interface-typed snapshot field. A typed nil inside an interface is non-nil,
+// so encoding/json would otherwise emit `"peer_directory_probes":null`
+// instead of honoring omitempty. The web protocol treats the extension as an
+// optional object and logs null as malformed on every world snapshot.
+func composePeerDirectoryProbesPayload(mgr *peering.Manager) any {
+	peerProbes := composePeerDirectoryProbes(mgr)
+	if len(peerProbes) == 0 {
+		return nil
+	}
+	return peerProbes
 }
 
 // currentPeers returns the manager's active peer status list, or nil if

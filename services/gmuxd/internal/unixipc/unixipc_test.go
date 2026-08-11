@@ -2,7 +2,6 @@ package unixipc
 
 import (
 	"encoding/json"
-	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -48,12 +47,15 @@ func TestListenCreatesDirectory(t *testing.T) {
 	}
 }
 
-func TestListenReplacesStaleSocket(t *testing.T) {
+func TestReplaceThenListenStaleSocket(t *testing.T) {
 	sockPath := filepath.Join(t.TempDir(), "gmuxd.sock")
 
 	// Create a stale socket file.
 	os.WriteFile(sockPath, []byte("stale"), 0o644)
 
+	if err := Replace(sockPath); err != nil {
+		t.Fatal(err)
+	}
 	ln, err := Listen(sockPath)
 	if err != nil {
 		t.Fatal(err)
@@ -268,18 +270,36 @@ func TestListenFailsIfSocketInUse(t *testing.T) {
 	}
 	// Don't close ln1 — simulate a running daemon.
 
-	// Listen should remove the socket file and rebind.
-	// This is expected behavior (Replace handles the graceful case).
-	ln2, err := Listen(sockPath)
-	if err != nil {
-		// On some systems this may fail if the old listener still holds it.
-		// That's okay: Replace() should be called first in production.
-		t.Logf("Listen returned error as expected when socket in use: %v", err)
+	// A second listener must not unlink the live daemon's path.
+	if ln2, err := Listen(sockPath); err == nil {
+		ln2.Close()
 		ln1.Close()
-		return
+		t.Fatal("Listen unexpectedly replaced a live socket")
+	}
+	if _, err := os.Stat(sockPath); err != nil {
+		t.Fatalf("live socket path was removed: %v", err)
 	}
 	ln1.Close()
-	ln2.Close()
+}
 
-	fmt.Println("Listen replaced socket file (OS allowed it)")
+func TestReplacePreservesReachableUnhealthySocket(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "gmuxd.sock")
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "starting", http.StatusServiceUnavailable)
+	})
+	srv := &http.Server{Handler: mux}
+	go srv.Serve(ln)
+	defer srv.Close()
+
+	if err := Replace(sockPath); err == nil {
+		t.Fatal("Replace unexpectedly removed a reachable listener")
+	}
+	if _, err := os.Stat(sockPath); err != nil {
+		t.Fatalf("reachable socket path was removed: %v", err)
+	}
 }

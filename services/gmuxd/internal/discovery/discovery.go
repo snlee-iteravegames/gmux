@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -16,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/gmuxapp/gmux/packages/adapter"
@@ -140,8 +142,10 @@ func Scan(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, onDe
 			// The 10s ModTime threshold is generous for the first case
 			// (a runner takes milliseconds to listen) and irrelevant
 			// for the second (the file is hours / days old).
-			if info, serr := entry.Info(); serr == nil && time.Since(info.ModTime()) > 10*time.Second {
-				os.Remove(sockPath)
+			if info, serr := entry.Info(); serr == nil && time.Since(info.ModTime()) > 10*time.Second && staleSocketError(err) {
+				if removeErr := os.Remove(sockPath); removeErr != nil && !os.IsNotExist(removeErr) {
+					log.Printf("discovery: remove stale socket %s: %v", sockPath, removeErr)
+				}
 			}
 		}
 	}
@@ -193,6 +197,14 @@ func Scan(sessions *store.Store, subs *Subscriptions, fileMon *FileMonitor, onDe
 			fileMon.NotifySessionDied(s.ID)
 		}
 	}
+}
+
+// staleSocketError accepts only errors that prove the socket path has no live
+// listener. In particular, EPERM/EACCES and timeouts are ambiguous: they can
+// come from a sandboxed duplicate daemon probing healthy runners and must not
+// be allowed to unlink those runners' sockets.
+func staleSocketError(err error) bool {
+	return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED)
 }
 
 // probeSocket checks if a Unix socket is still accepting connections.

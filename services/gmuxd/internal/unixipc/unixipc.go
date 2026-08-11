@@ -10,27 +10,32 @@ package unixipc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 )
 
 // Listen creates and binds a Unix socket at the given path.
 // The socket file is created with 0600 permissions in a 0700 directory.
-// Any existing socket file is removed first.
+// The caller must remove a verified-stale path with Replace first. Listen never
+// unlinks an existing path because it may belong to a healthy daemon that the
+// caller cannot reach due to sandbox permissions.
 func Listen(sockPath string) (net.Listener, error) {
 	dir := filepath.Dir(sockPath)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("unixipc: creating directory %s: %w", dir, err)
 	}
 
-	// Remove stale socket file if present.
-	if err := os.Remove(sockPath); err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("unixipc: removing stale socket %s: %w", sockPath, err)
+	if _, err := os.Lstat(sockPath); err == nil {
+		return nil, fmt.Errorf("unixipc: socket path already exists: %s", sockPath)
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("unixipc: checking socket %s: %w", sockPath, err)
 	}
 
 	ln, err := net.Listen("unix", sockPath)
@@ -142,7 +147,26 @@ func Replace(sockPath string) error {
 			return fmt.Errorf("existing daemon at %s did not shut down", sockPath)
 		}
 	}
-	// Remove stale socket file (may exist even if daemon is gone).
+
+	info, err := os.Lstat(sockPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("checking existing socket %s: %w", sockPath, err)
+	}
+	if info.Mode()&os.ModeSocket != 0 {
+		conn, dialErr := net.DialTimeout("unix", sockPath, 500*time.Millisecond)
+		if dialErr == nil {
+			conn.Close()
+			return fmt.Errorf("existing listener at %s is reachable but unhealthy", sockPath)
+		}
+		if !errors.Is(dialErr, os.ErrNotExist) && !errors.Is(dialErr, syscall.ECONNREFUSED) {
+			return fmt.Errorf("cannot verify existing socket %s: %w", sockPath, dialErr)
+		}
+	}
+
+	// Only a non-socket file or a socket proven to have no listener is stale.
 	if err := os.Remove(sockPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("removing stale socket %s: %w", sockPath, err)
 	}
