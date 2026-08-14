@@ -40,6 +40,11 @@ func TestCanonicalizePath(t *testing.T) {
 		t.Skip("no home dir")
 	}
 
+	canonicalTmp := filepath.Clean("/tmp")
+	if resolved, err := filepath.EvalSymlinks(canonicalTmp); err == nil {
+		canonicalTmp = resolved
+	}
+
 	tests := []struct {
 		input string
 		want  string
@@ -48,7 +53,7 @@ func TestCanonicalizePath(t *testing.T) {
 		{home + "/dev/gmux", "~/dev/gmux"},
 		{home + "/", "~"},
 		{"/opt/data", "/opt/data"},
-		{"/tmp/../tmp", "/tmp"},
+		{"/tmp/../tmp", canonicalTmp},
 		{"", ""},
 		// Already canonical: passes through unchanged.
 		{"~/dev/gmux", "~/dev/gmux"},

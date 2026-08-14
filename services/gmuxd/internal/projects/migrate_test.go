@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/gmuxapp/gmux/packages/paths"
 )
 
 func TestMigrateV1ToV2(t *testing.T) {
@@ -70,10 +72,11 @@ func TestMigrateV1ToV2(t *testing.T) {
 		t.Errorf("gmux sessions = %v", gmux.Sessions)
 	}
 
-	// Item 1: tmp — path outside $HOME stays absolute.
+	// Item 1: tmp — path outside $HOME stays absolute and canonical.
 	tmp := state.Items[1]
-	if len(tmp.Match) != 1 || tmp.Match[0].Path != "/tmp" {
-		t.Errorf("tmp match = %+v", tmp.Match)
+	wantTmp := paths.CanonicalizePath("/tmp")
+	if len(tmp.Match) != 1 || tmp.Match[0].Path != wantTmp {
+		t.Errorf("tmp match = %+v, want path %q", tmp.Match, wantTmp)
 	}
 
 	// Item 2: home — $HOME itself becomes ~.
@@ -247,4 +250,3 @@ func TestMigrateV1EmptyItems(t *testing.T) {
 		t.Errorf("expected 0 items, got %d", len(state.Items))
 	}
 }
-
