@@ -36,3 +36,5 @@ gmux gmuxd
 
 # Agent handoff/scratch docs
 .memory/
+
+.DS_Store
