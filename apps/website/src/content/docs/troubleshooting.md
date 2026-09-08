@@ -72,13 +72,19 @@ See the [Remote Access troubleshooting section](/remote-access/#troubleshooting)
 
 ## Updating
 
-It's safe to update gmux while sessions are running; they reconnect automatically. gmux checks for new releases in the background and notifies you in the dashboard sidebar and when you run `gmux` with no arguments.
+It's safe to update gmux while sessions are running; they reconnect automatically. gmux checks for new releases in the background and shows an update link in the dashboard's home-page footer. `gmux open` and `gmux daemon status` also report an available release.
+
+Use the command for your installation method:
+
+- **Homebrew**: `brew upgrade gmuxapp/tap/gmux`
+- **`curl | sh` installer**: `curl -sSfL https://gmux.app/install.sh | sh`
+- **Manual installs**: replace both `gmux` and `gmuxd` with binaries from the same [GitHub Release](https://github.com/gmuxapp/gmux/releases)
 
 After updating, the old daemon is replaced automatically:
 
-- **Homebrew**: the postflight hook restarts the daemon during install
+- **Homebrew**: the postflight hook restarts the daemon if it was running
 - **`curl | sh` installer**: restarts the daemon if it was running
-- **Manual installs**: the next `gmux` invocation detects the version mismatch and replaces the daemon
+- **Manual installs**: the next `gmux open` or `gmux -- <command>` detects the version mismatch and replaces the daemon
 
 To force a restart manually: `gmux daemon restart` (or just `gmux daemon start`, which replaces any running instance).
 
